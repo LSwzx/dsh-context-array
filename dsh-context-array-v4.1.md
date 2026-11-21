@@ -13,7 +13,7 @@
 | # | 待确认事项 | 影响范围 | 结论 |
 |---|---|---|---|
 | 1 | 请求拦截点（Hook）：能否在请求发给模型前读写完整 prompt，从而控制 L1–L5 拼装 | M1 | **能控制，但不能改写整串**。`llm/stream` 能读到完整 `GenerateOptions`（messages/tools/sessionId），但请求被深度冻结、改动即抛异常。写入只有两条通道：① `ctx.systemPrompt.section/context/variable` + `system-prompt/assemble` waterfall 控制 L1–L4；② 只追加 L5（`agent.inject`、`agent/pre-step` 的 enter 批次、工具 `deferContext`/`additionalContexts`）。见 0.1-① |
-| 2 | 能否从响应中拿到实际缓存命中数（线上协议字段名以实跑为准） | 缓存验收 | **能拿到统一字段，但拿不到原始 provider JSON**（已 M1 实测）。真实路由为 `deepseek-official` / `deepseek-flash`（Messages 协议），插件侧只能读到适配器折算后的 `TokenUsage.cacheReadTokens`，且 **`cacheWriteTokens` 恒为 0**，故命中率分母为 `inputTokens + cacheReadTokens`。长会话实测命中率 **0.9981**（min 0.9933 / max 0.9996，18 次请求，`prefixDigest` 全程不变）。见 0.1-② 与 `docs/M1-RESULTS.md` |
+| 2 | 能否从响应中拿到实际缓存命中数（线上协议字段名以实跑为准） | 缓存验收 | **能拿到统一字段，但拿不到原始 provider JSON**（已 M1 实测）。真实路由为 `deepseek-official` / `deepseek-flash`（Messages 协议），插件侧只能读到适配器折算后的 `TokenUsage.cacheReadTokens`，且 **`cacheWriteTokens` 恒为 0**，故命中率分母为 `inputTokens + cacheReadTokens`。长会话实测命中率 **0.9986**（min 0.9933 / max 0.9996，49 次请求，`prefixDigest` 全程不变）。见 0.1-② 与 `docs/M1-RESULTS.md` |
 | 3 | session_id 从何处获取 | 会话与空间绑定 | **能稳定获取**。`SessionId`（品牌化字符串）即持久会话身份：工具内 `exec.agent.id`；提示词提供方内 `context.agent.id`（`AssembleContext.agent`）；事件侧 `session/created`、`session/event`、`agent/created`；请求侧 `GenerateOptions.sessionId`。见 0.1-③ |
 | 4 | 工具注册方式与参数结构；运行时能否保证工具顺序固定 | L2 | **能**。注册用 `ctx.tools.register(defineTool({name, description, parameters, output, execute, ...}), { when? })`，其中 `output`（schema + render）为必填契约。顺序由 `toolOrder` 配置（须含一次 `<unlisted-tools>` 占位）决定，未配置则**字典序**，权威顺序写入 `request/header`；与注册顺序无关。见 0.1-④ |
 | 5 | 能否通过 API 唤醒空闲会话 | 留言箱是主动推送还是下一轮拉取 | **能，但"唤醒"≠"免费"**。`agent.inject()` 只排队、**不唤醒**，空闲会话实际要等下一次 pre-step 才看到（等价于"下一轮拉取"）；要让空闲会话**立即行动**必须用 `agent.followup()`（开新轮、计费一次模型请求），宿主侧可用 `ctx.schedule.run()`，同树可用 `ctx.subagents.sendMessage()`。主动唤醒受 3.4 的冷却与频率上限约束。见 0.1-⑤ |
@@ -36,7 +36,7 @@
 - 下发时机：适配器在 `finish` 之前发 `usage`、之后不再有任何分片，因此 `llm/stream` 旁路迭代即可逐请求拿到命中数。
 - **命中率口径**：`hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`。Messages 路由会额外上报 cacheWrite，必须计入分母；只算 `cacheRead / prompt_tokens` 会把命中率算高。
 - 会话侧已有投影 `TokenUsageProjection { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`（`dsh-api-session-controller`），客户端"性能用量"读的就是它。
-- **M1 端到端实测**（详见 `docs/M1-RESULTS.md`）：真实路由 `deepseek-official/deepseek-flash`；28 条真实请求记录；长会话 18 次请求命中率 0.9981（min 0.9933 / max 0.9996），`prefixDigest` 全程 1 个值；`cacheWriteTokens` 28 条全部为 0。**原始 provider JSON 不可达**，记录里以 `usageSource: "normalized-usage-chunk"` 标注。
+- **M1 端到端实测**（详见 `docs/M1-RESULTS.md`）：真实路由 `deepseek-official/deepseek-flash`；98 条真实请求记录（2 个会话）；长会话 49 次请求命中率 0.9986（min 0.9933 / max 0.9996），两会话合计稳态 0.9861；`prefixDigest` 每个会话全程 1 个值；`cacheWriteTokens` 全部为 0。**原始 provider JSON 不可达**，记录里以 `usageSource: "normalized-usage-chunk"` 标注。
 
 **③ session_id**
 
@@ -378,7 +378,7 @@ export class MemoryManagerDB {
   bootstrap 快照）。仓库自带 54 项单测，`node --test` 全绿。
 - 第 0 节表格第 2 行与 0.1-② 回填实测结论：真实路由 `deepseek-official/deepseek-flash`；
   命中数只能拿到规范化 `cacheReadTokens`，`cacheWriteTokens` 恒 0；原始 provider JSON
-  不可达（`usageSource` 标注）；长会话命中率 0.9981（min 0.9933 / max 0.9996）。
+  不可达（`usageSource` 标注）；长会话命中率 0.9986（min 0.9933 / max 0.9996，49 次请求），两会话合计稳态 0.9861。
 - 新增观测字段 `systemMessageCount` 与 `systemDigestAll`：`systemDigest` 只覆盖第 0 号
   节点，实测发现提示词变更走 `in-history` 追加（`systemMessageCount` 增长而
   `systemDigest` 不变），两者一起才能区分"前缀未变"与"有效提示词已变"。
