@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "上下文阵列",
+    "description": "本地运行的五维记忆库：以 KV Cache 保护优先的方式拼装 L1–L4 前缀，并逐请求记录缓存命中率。",
+    "detail": "docs/DETAIL.md"
+  }
+}

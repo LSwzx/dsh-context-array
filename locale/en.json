@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Context array",
+    "description": "Locally hosted five-dimension memory with KV-cache-first prompt assembly and per-request cache-hit accounting.",
+    "detail": "docs/DETAIL.md"
+  }
+}

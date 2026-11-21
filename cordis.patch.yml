@@ -1,0 +1,10 @@
+- insert:
+    - id: context-array
+      name: dsh-context-array
+      config:
+        dataDir: ''          # empty = <home>/.dsh/context-array
+        spaceId: space-default
+        spaceName: Default space
+        spaceRules: 'Shared workspace facts stay in this space unless a more specific space is bound.'
+        observeUsage: true
+        bootstrapMessages: true
