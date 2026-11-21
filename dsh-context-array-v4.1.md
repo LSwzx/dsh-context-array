@@ -6,9 +6,9 @@
 
 以下五项未确认之前，文档中依赖它们的设计均为假设。结论已全部填回。
 
-验证环境：DSH `0.2.2-rc.3`（Desktop profile，Electron + Node 24.21.0，内置 SQLite 3.53.4），实测时间 2026-11-21。下文的 `packages/...`、`docs/...` 路径均取自该安装的 `D:\progranfile\dsh\resources\app.asar\dsh\node_modules\@deepseek-ai\`。
+验证环境：第 0 节取数时该安装的 `@deepseek-ai/dsh` 为 `0.2.2-rc.3`；M1 端到端实测所在实例为 `0.2.2-rc.5`（本会话中途 DSH 重启/更新过一次，Desktop profile，Electron + Node 24.21.0，内置 SQLite 3.53.4）。实测时间 2026-11-21。下文的 `packages/...`、`docs/...` 路径均取自该安装的 `D:\progranfile\dsh\resources\app.asar\dsh\node_modules\@deepseek-ai\`。
 
-**验证强度**：五项结论目前是**源码/文档级**结论（读该安装的文档与源码），其中只有 SQLite 相关能力是脚本实跑；**端到端（真实模型请求 → 真实 usage JSON）尚未实跑**，由 M1 第 1 步补齐并回填。
+**验证强度**：五项结论为**源码/文档级**（读该安装的文档与源码）+ SQLite 脚本实跑。**M1 已端到端实跑**（真实模型请求 → 真实 usage 记录，见 `docs/M1-RESULTS.md`），并据此修正了一条假设：**适配器不暴露原始 provider usage JSON**，插件只能拿到规范化 `TokenUsage`。
 
 | # | 待确认事项 | 影响范围 | 结论 |
 |---|---|---|---|
@@ -32,7 +32,7 @@
 **② 缓存命中字段**
 
 - 统一出口是 `TokenUsage.cacheReadTokens`（命中）与 `cacheWriteTokens`（写入），且**计数互不重叠**：`inputTokens` 只含未缓存部分，计费输入是三者之和（`docs/subsystems/llm-streaming.zh.md`「`TokenUsage`」）。
-- 本 profile 允许的两条路由 `deepseek-official/deepseek-flash`、`deepseek-account/deepseek-flash` 由 `dsh-llm-deepseek` 提供，其代码路径读取的 usage 字段是 `cache_read_input_tokens` / `cache_creation_input_tokens`，再映射到上述两项（`dsh-llm-deepseek/lib/index.js:1889`）——**注意这不是 DeepSeek 公开文档里的 `prompt_cache_hit_tokens`**。DeepSeek 的 `prompt_cache_hit_tokens` 只在 pi-ai 的 openai-completions 路由被显式识别（`@earendil-works/pi-ai/dist/api/openai-completions.js:1175`，注释原文即 "DeepSeek uses prompt_cache_hit_tokens"）。本项目路由实际走哪条线字段，以 M1 实跑的原始 usage 为准，文档只依赖统一字段 `cacheReadTokens`。
+- 本 profile 允许的两条路由 `deepseek-official/deepseek-flash`、`deepseek-account/deepseek-flash` 由 `dsh-llm-deepseek` 提供，其代码路径读取的 usage 字段是 `cache_read_input_tokens` / `cache_creation_input_tokens`，再映射到上述两项（`dsh-llm-deepseek/lib/index.js:1889`）——**注意这不是 DeepSeek 公开文档里的 `prompt_cache_hit_tokens`**。DeepSeek 的 `prompt_cache_hit_tokens` 只在 pi-ai 的 openai-completions 路由被显式识别（`@earendil-works/pi-ai/dist/api/openai-completions.js:1175`，注释原文即 "DeepSeek uses prompt_cache_hit_tokens"）。本项目路由实际走哪条线字段，以 M1 实测的规范化记录为准（**原始 provider JSON 不可达**，插件只能拿到折算后的 `cacheReadTokens`），文档只依赖统一字段 `cacheReadTokens`。
 - 下发时机：适配器在 `finish` 之前发 `usage`、之后不再有任何分片，因此 `llm/stream` 旁路迭代即可逐请求拿到命中数。
 - **命中率口径**：`hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`。Messages 路由会额外上报 cacheWrite，必须计入分母；只算 `cacheRead / prompt_tokens` 会把命中率算高。
 - 会话侧已有投影 `TokenUsageProjection { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`（`dsh-api-session-controller`），客户端"性能用量"读的就是它。
@@ -352,7 +352,7 @@ export class MemoryManagerDB {
 
 1. **M0 接口确认**：完成第 0 节五项验证，把结论填回表格。（v4.1.1 已完成）
 2. **M1 验证期**：观测与追加层 + 单空间静态建表 + `systemPrompt.section()` 段注册。（v4.1.3 已实现并端到端验证，见 `docs/M1-RESULTS.md`）
-   - **M1-1（先做）**：实跑一次真实模型请求，把**适配器返回的原始 usage JSON 原样落盘**（不要只存折算后的字段），据此回填 0.1-② 的线字段名与取值，并确认 `llm/stream` 旁路能看到该块。
+   - **M1-1（先做）**：实跑一次真实模型请求，把 `llm/stream` 收到的 `usage` 分块（规范化 `TokenUsage`）原样落盘，并在结论文档里标注"原始 provider JSON 不可达"。据此确认实际路由（provider/model）、`cacheWriteTokens` 是否为 0，以及命中率分母；`llm/stream` 旁路能看到该块即为通过。
    - **M1-2**：用 `llm/stream` 旁路读取 `usage.cacheReadTokens`，按 `cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` 逐请求打印命中率。
    - **M1-3**：在空数据、多会话状态下验证 L1–L4 前缀的稳态命中率达标。
 3. **M2 检索期**：本地向量 + FTS5 trigram 混合检索跑通。
@@ -398,7 +398,7 @@ export class MemoryManagerDB {
 - 第 3.4 节：留言箱改为"排队（`inject`，不唤醒、免费）"与"唤醒（`followup` / `schedule.run`，计费一次轮次）"两条路径，修正 v4.1.1 里"到达即追加"与 `inject` 实际不唤醒之间的矛盾；新增唤醒冷却与频率上限；补明确 hop_count 的触发判定（监听 `agent/inbox/claimed` 或读 pre-step 批次，按 `source.kind === 'agent-message'` 认触发器）。
 - 第 0 节：新增"验证强度"声明——五项结论为**源码/文档级**，仅 SQLite 为脚本实跑，端到端（真实请求 → 原始 usage）待 M1-1 补齐；表格第 2 行改为"实际缓存命中数（线字段待实跑确认）"，并说明本路由代码路径读的是 `cache_read_input_tokens`、`prompt_cache_hit_tokens` 属于 pi-ai 路由；表格第 5 行按"唤醒 = 开新轮 = 计费"改写；0.2 增补第 7（唤醒限流）、第 8（BLOB 拷贝）条。
 - 第 3.3 / 5 / 6 节：补 embedding 运行隔离要求（`worker_threads` 或子进程，否则 onnxruntime 同步推理卡死 Host 主进程）；第 5 节补 worker/Host 分工约定（`LocalEmbedding` 在 worker 内、`MemoryManagerDB` 在 Host 存储层）；M2 新增 M2-1 可行性实验（onnxruntime 能否在 Electron 运行时加载、首次加载耗时、单条 384 维 embedding 延迟、推理期间主进程是否阻塞）。
-- M1 拆为 M1-1（实跑真实请求并原样落盘原始 usage JSON）、M1-2（命中率打印）、M1-3（空数据/多会话稳态命中率达标）。
+- M1 拆为 M1-1（实跑真实请求并落盘规范化 usage）、M1-2（命中率打印）、M1-3（空数据/多会话稳态命中率达标）。
 
 **v4.1 → v4.1.1（第 0 节前置验证，DSH 0.2.2-rc.3 / Node 24.21.0 / SQLite 3.53.4，2026-11-21）**
 

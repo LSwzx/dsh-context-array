@@ -4,11 +4,11 @@
 [`dsh-context-array-v4.1.md`](../dsh-context-array-v4.1.md) 第 0 节与第 6 节 M1 的三步
 （M1-1 真实 usage、M1-2 命中率、M1-3 多会话稳态）。
 
-- 环境：DSH `0.2.2-rc.3`（Desktop profile，Electron + Node 24.21.0，内置 SQLite 3.53.4）
+- 环境：实测实例 DSH `0.2.2-rc.5`（Desktop profile，Electron + Node 24.21.0，内置 SQLite 3.53.4）；第 0 节取数时同一安装读到的是 `0.2.2-rc.3`，本会话中途 DSH 重启/更新过一次
 - 日期：2026-11-21
 - 数据来源：`%USERPROFILE%\.dsh\context-array\usage.jsonl`（插件自身写入），已由
   [`analyze-usage.mjs`](analyze-usage.mjs) 汇总
-- 采集时的样本量：**28 条请求记录 / 2 个会话**
+- 撰写时快照：**28 条请求记录 / 2 个会话**（日志随会话持续增长，复现时数字会更大）
 
 ## M1-1 真实请求的 usage
 

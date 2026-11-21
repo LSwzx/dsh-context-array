@@ -26,7 +26,7 @@ existing session's node 0.
 
 ### 2. Static store
 
-The SQLite database lives at `~/.dsh/context-array/context-array.db` by default and
+The SQLite database lives at `%USERPROFILE%\.dsh\context-array\context-array.db` by default and
 is created with the schema from the design document §4: `memory_spaces`,
 `session_space_links`, `memories` (explicit integer `seq` primary key), the FTS5
 `trigram` index over `memories` with its three content-table triggers, `inbox`,
@@ -40,7 +40,8 @@ transactions are written as `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`.
 ### 3. Usage observer
 
 The `llm/stream` waterfall exposes every model call. The observer wraps the stream
-and passes each chunk through untouched while recording one JSON line per request:
+and passes each chunk through untouched while recording one JSON line for every request
+that reports usage:
 
 ```json
 {
@@ -97,6 +98,6 @@ agent, and it never changes L1–L4. The injection is idempotent per session
   is not reachable. Records mark this explicitly with `usageSource`.
 - Memory retrieval, the manager queue, and the inbox are schema-only in M1; M2–M4
   implement them.
-- Embedding runs on CPU and is not part of M1. When M2 adds it, it must run in a
+- Embedding is not part of M1. When M2 adds it, it will run on CPU and must run in a
   worker or child process: `onnxruntime` inference is synchronous and would otherwise
   block the whole Host.

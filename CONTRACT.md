@@ -108,8 +108,8 @@ Rules:
 - Append with `fs.appendFileSync` (sync, no ordering races) after creating the directory once.
 - `readLog()` returns parsed records; tolerate a truncated last line.
 - `stats()` returns `{ requests, meanHitRate, lastAt }`.
-
-Canonical JSON: sorted object keys, stable output (write a local helper; do not rely on third-party libs).
+- `toolsDigest` = sha256 of the canonical JSON of the **whole `tools` array** (deep key sort, array order preserved, non-JSON members dropped); an empty/absent tool list digests the canonical empty array. `systemDigest` covers system node 0 only; `systemDigestAll` covers every system-role message joined by a blank line, so an in-history prompt append is visible.
+- Canonical JSON: sorted object keys, stable output (write a local helper; do not rely on third-party libs).
 
 ## `src/append.js`
 
@@ -130,4 +130,4 @@ The injected message is queued by `agent.inject()` for the next `agent/pre-step`
 
 ## Tests
 
-`node --test test/` (built-in `node:test` + `node:assert/strict`). Each owner runs only its own test files with `node --test test/<file>.mjs`. Tests must not touch `%USERPROFILE%\.dsh`; use `os.tmpdir()` directories and delete them afterwards.
+`node --test` (built-in `node:test` + `node:assert/strict`; run it from the repository root — `node --test test/` is not a valid target on Node 24). Each owner runs only its own test files with `node --test test/<file>.mjs`. Tests must not touch `%USERPROFILE%\.dsh`; use `os.tmpdir()` directories and delete them afterwards.
