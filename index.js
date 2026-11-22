@@ -12,6 +12,7 @@
  */
 
 import { resolveConfig } from './src/config.js'
+import fs from 'node:fs'
 import {
   bindSessionSpaces,
   ensureDefaultSpace,
@@ -30,6 +31,7 @@ import {
   L4_SECTION,
   renderBootstrapSection,
   renderL4,
+  withSalt,
 } from './src/prompt.js'
 import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
@@ -83,8 +85,22 @@ export function apply(ctx, rawConfig = {}) {
   if (takeover.installed) ctx.logger?.('dsh-context-array')?.info?.('[compaction] seam claimed in observe mode')
 
   // L1 and L3 are global and static, so every session on this deployment shares
-  // the same bytes.
-  ctx.systemPrompt.section({ name: L1_SECTION, order: L1_ORDER, text: L1_TEXT, interpolate: false })
+  // the same bytes. The L1 text is a provider (not a literal) purely so the
+  // diagnostic salt file can change node 0 while the observer keeps running; with
+  // no salt file the rendered text is byte-identical to L1_TEXT.
+  const readSalt = () => {
+    try {
+      return fs.readFileSync(config.promptSaltFile, 'utf8').slice(0, 200)
+    } catch {
+      return ''
+    }
+  }
+  ctx.systemPrompt.section({
+    name: L1_SECTION,
+    order: L1_ORDER,
+    text: () => withSalt(L1_TEXT, readSalt()),
+    interpolate: false,
+  })
   ctx.systemPrompt.section({ name: L3_SECTION, order: L3_ORDER, text: L3_TEXT, interpolate: false })
 
   // L4 sections are registered on an agent's own context, which outlives this

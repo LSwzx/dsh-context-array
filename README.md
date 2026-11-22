@@ -10,9 +10,25 @@
 
 > **状态**：M1 已跑通；M0-6 的"接管"已验证（能认领 `ctx.compaction`、能看到压力），
 > 但**折叠策略未实现**，`observe` 模式下不会发生压缩；M1-4 双轨指标已上线。
-> **另有一个待复核的反常现象**：实测中改动前缀（工具数 62→63、系统节点消失后恢复）后
-> 缓存命中并没有按预期下跌，`cacheReadTokens` 仍远大于 `prefixTokens`。在受控实验出结果前，
-> "改前缀必失效"只算未证实假设（详见 M1-RESULTS 的"反常现象"一节）。
+> **受控实验（`promptSalt`）修正了一条重要假设**：在本机这条 `in-history` 路由上，
+> 改提示词**不会重写系统节点 0**（`systemDigest` 恒定、`systemMessageCount` 增长），
+> 变化是作为追加的 `system` 消息进历史的。所以"改前缀必打穿缓存"在正常使用中基本不成立，
+> 真正能改写节点 0 的只剩：非 in-history 路由、有效文本不同的新序列、压缩替换。
+> 唯一未解释的是一次"工具数 62→63 而命中不跌"，已列为下一轮待办。
+
+## 缓存节省测算（真实日志）
+
+221 个请求、81.5M 提示词 token，其中 99.76% 命中缓存。若无缓存、每请求全价重算：
+
+| 命中价/未命中价 `r` | 计费输入等价值 | 相对无缓存节省 |
+|---|---|---|
+| 0.25 | 20.5M | **74.8%** |
+| 0.10 | 8.3M | **89.8%** |
+| 0.05 | 4.3M | **94.8%** |
+
+关键不是省那 18k 的 L1–L4，而是**防止一次前缀破坏把 369k 的平均提示词整段打回全价**
+（≈400 倍于正常一步的未命中量）。完整模型、反事实假设与边界见
+[`docs/CACHE-SAVINGS.md`](docs/CACHE-SAVINGS.md)，复现：`node docs/savings-estimate.mjs`。
 
 ## 已实现的东西
 
@@ -61,6 +77,7 @@
 | `bootstrapMessages` | `true` | 每个新会话注入一条 bootstrap 快照 |
 | `compactionMode` | `observe` | `off` 不动部署；`observe` 认领 `ctx.compaction` 但**永不折叠**（实测模式） |
 | `compactionWarnTokens` | `300000` | `observe` 模式下压力采样阈值（token） |
+| `promptSaltFile` | `<dataDir>/prompt-salt.txt` | 诊断用：改这个文件可在观测层不停的情况下改 L1，做缓存受控实验 |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
 > 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，

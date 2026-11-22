@@ -41,6 +41,24 @@ export const L3_TEXT = [
 ].join('\n')
 
 /**
+ * Return the L1 text with an optional salt marker appended.
+ *
+ * The salt is a diagnostic knob for the controlled cache experiment: changing it
+ * changes node 0 while the plugin (and therefore the usage observer) keeps running,
+ * so the next request's `cacheReadTokens` shows whether a prefix change really breaks
+ * the provider cache. An empty salt returns the exact static text.
+ *
+ * @param {string} base - the static L1 text
+ * @param {string} salt - short marker read at assembly time; '' disables it
+ * @returns {string}
+ */
+export function withSalt(base, salt) {
+  const marker = typeof salt === 'string' ? salt.trim() : ''
+  if (marker.length === 0) return base
+  return `${base}\n<context-array-salt>${marker}</context-array-salt>`
+}
+
+/**
  * Deterministic L4 rendering for one session's space set.
  *
  * Spaces are sorted by id and rendered without timestamps, so the same bound

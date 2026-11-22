@@ -176,20 +176,47 @@ wholeHit        = cacheRead / (input + cacheRead + cacheWrite)
 - 任何 `surfaceOp: replace` 事件都会被 `history/replace` 记录，用于把"前缀被重写"的
   轮次从稳态统计里剔除；实测期间该计数为 **0**，说明没有发生压缩或剪枝。
 
-### 待复核的实验设计（下一轮）
+### 受控实验（`promptSalt`）：结论是"这个路由不会重写节点 0"
 
-用同一会话、同一工具集，**在观测层保持运行的前提下**只改系统节点 0 的一段文本
-（例如加一个只有内容不同的 `promptSalt` 配置），然后看下一个请求的
-`cacheReadTokens` 是否真的跌到 `prefixTokens` 以下。如果仍然不跌，说明
-DeepSeek 的 `prompt_cache_hit_tokens` 不是严格连续前缀匹配，整套"保护前缀"的收益模型
-需要重写；如果跌了，则 M1-4 指标成立，且本轮异常可以用"改动落在未缓存分块内"解释。
+实现：L1 文本改成在**每次拼装时**读 `<dataDir>/prompt-salt.txt` 的 provider（文件不存在时
+与静态文本逐字节相同），这样改文件就能改提示词，而**观测层始终在跑**。
+
+实验步骤与结果（同一会话 `ef62b67e…`，全程 `prefixTokens = 17,957`）：
+
+| 时刻 | 动作 | `systemDigest`（节点 0） | `systemDigestAll` | `systemMessageCount` | `cacheReadTokens` | `prefixHit` |
+|---|---|---|---|---|---|---|
+| 06:56:18 | 基线（无 salt） | `3d4e11cf` | `663d6890` | 10 | 543,360 | 1 |
+| 06:56:26 | 写入 salt=A 前的请求 | `3d4e11cf` | `f29746a4` | 12 | 545,664 | 1 |
+| 06:56:30 | salt=A 生效 | `3d4e11cf` | `0fa2f32a` | 13 | 547,712 | 1 |
+| 06:56:49 | salt=A 稳定 | `3d4e11cf` | `0fa2f32a` | 13 | 549,760 | 1 |
+
+**节点 0 从头到尾没变**（`systemDigest` 恒为 `3d4e11cf`），变的只有 `systemDigestAll` 与
+`systemMessageCount`。也就是说：在这条 `in-history` 路由上，渲染后的提示词（含我们的
+L1/L3/L4 与新增的 salt）是**作为追加的 `system` 消息**进入历史的，**不会重写节点 0**。
+
+这条结论比原来那个"反常现象"更精确，也修正了文档里的一个隐含错误：
+
+1. **"改提示词会打穿前缀"在这个路由上基本不成立**——DSH 的协调逻辑会追加而不是改写节点 0。
+   真正能把节点 0 改掉的只剩：不具备 `systemPromptUpdate` 的路由、新请求序列开始且有效文本
+   不同、以及压缩的表层替换（`surfaceOp: replace`）。
+2. **这个会话的 L1–L4 其实不在节点 0 里**（会话在插件安装前就存在，节点 0 是原始基础提示词；
+   我们的段以 in-history 快照形式追加）。对**新会话**才是"段进入节点 0"。因此
+   `prefixHit` 的分母（节点 0 + 工具）测的是"基础提示词 + 工具"这段，而不是"我们的段"。
+3. 之前"工具数 62→63 而命中不跌"的现象因此**仍未被解释**（那是唯一一次真正动了请求前部
+   字节的改动）。要干净地测它，需要一次可控的工具增删（例如启用/停用一个带工具的插件），
+   留待下一轮。
+
+**对收益模型的影响**：由于该路由不会因提示词变化重写节点 0，"前缀被自己的提示词改动打穿"
+这条成本路径在正常使用下几乎不存在；收益模型应主要覆盖**压缩折叠**与**工具集变更**两类
+真实破坏源。按真实日志估算的节省见 [`CACHE-SAVINGS.md`](CACHE-SAVINGS.md)。
 
 ## 复现方式
 
 ```powershell
 cd D:\dshprogram\dsh-context-array
-node --test                                  # 73 项单测
+node --test                                  # 74 项单测
 node docs\analyze-usage.mjs                  # 双轨指标 + TTL 空档 + 压缩事件
+node docs\savings-estimate.mjs               # 按真实日志估算节省
 Get-Content "$env:USERPROFILE\.dsh\context-array\usage.jsonl" -Tail 5
 Get-Content "$env:USERPROFILE\.dsh\context-array\events.jsonl" -Tail 5
 ```

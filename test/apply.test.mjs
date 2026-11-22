@@ -235,6 +235,21 @@ test('agents already live at activation are bootstrapped without agent/created',
   assert.match(live.injected[0].content[0].text, /<context-array-bootstrap>/)
 })
 
+test('L1 text is a provider that stays byte-identical until the salt file exists', (t) => {
+  const { dataDir, host } = setup(t)
+  const l1 = host.sections.find((section) => section.name === 'context-array:l1')
+  assert.equal(typeof l1.text, 'function')
+  const plain = l1.text({})
+  assert.equal(plain.includes('<context-array-salt>'), false)
+
+  fs.writeFileSync(path.join(dataDir, 'prompt-salt.txt'), 'experiment-A')
+  const salted = l1.text({})
+  assert.equal(salted.startsWith(plain), true)
+  assert.match(salted, /<context-array-salt>experiment-A<\/context-array-salt>/)
+  // Deterministic while the file is unchanged.
+  assert.equal(l1.text({}), salted)
+})
+
 test('compaction takeover is opt-in: default leaves the seam untouched', (t) => {
   const { host } = setup(t)
   assert.equal(host.provided.length, 0, 'off mode must not claim ctx.compaction')

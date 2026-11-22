@@ -180,7 +180,8 @@ by patch row); two providers in one context cannot coexist.
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
 `compactionMode` (`off` | `observe`, defaults to `off`), `compactionWarnTokens`
-(default `300000`), derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
+(default `300000`), `promptSaltFile` (diagnostic; defaults to `<dataDir>/prompt-salt.txt`),
+derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
 
 ## Tests
 

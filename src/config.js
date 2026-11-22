@@ -77,6 +77,12 @@ export function resolveConfig(raw) {
     dbPath: path.join(dataDir, 'context-array.db'),
     usageLogPath: path.join(dataDir, 'usage.jsonl'),
     eventsLogPath: path.join(dataDir, 'events.jsonl'),
+    // Diagnostic knob for the controlled cache experiment: editing this file
+    // changes L1 (node 0) with the observer still running.
+    promptSaltFile:
+      typeof input.promptSaltFile === 'string' && input.promptSaltFile.trim() !== ''
+        ? path.resolve(input.promptSaltFile.trim())
+        : path.join(dataDir, 'prompt-salt.txt'),
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),
