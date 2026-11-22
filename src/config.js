@@ -19,8 +19,16 @@ export const DEFAULT_SPACE_RULES =
 /** `<home>/.dsh/context-array`, used when `dataDir` is empty. */
 export const DEFAULT_DATA_DIR = path.join(os.homedir(), '.dsh', 'context-array');
 
-/** How compaction is handled: `off` leaves the deployment alone, `observe` claims the seam but never folds. */
-export const COMPACTION_MODES = Object.freeze(['off', 'observe']);
+/** How compaction is handled: `off` leaves the deployment alone, `observe` claims the seam but never folds, `fold` really folds. */
+export const COMPACTION_MODES = Object.freeze(['off', 'observe', 'fold']);
+
+/** Defaults for the folding policy (`fold` mode only). */
+export const FOLD_CONFIG_DEFAULTS = Object.freeze({
+  foldRatio: 0.85,
+  retainRatio: 0.3,
+  minFoldTokens: 8_000,
+  summaryMaxTokens: 600,
+});
 
 /** Default pressure at which `observe` mode records a sample (tokens). */
 export const DEFAULT_COMPACTION_WARN_TOKENS = 400_000;
@@ -48,6 +56,16 @@ function stringOr(value, fallback) {
  */
 function booleanOr(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+/** Return `value` when it is a finite number in (0, 1], otherwise `fallback`. */
+function ratioOr(value, fallback) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
+}
+
+/** Return `value` when it is a positive safe integer, otherwise `fallback`. */
+function positiveIntOr(value, fallback) {
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 /**
@@ -113,6 +131,13 @@ export function resolveConfig(raw) {
       input.compactionAlarmRatio <= 1
         ? input.compactionAlarmRatio
         : DEFAULT_COMPACTION_ALARM_RATIO,
+    compactionFoldRatio: ratioOr(input.compactionFoldRatio, FOLD_CONFIG_DEFAULTS.foldRatio),
+    compactionRetainRatio: ratioOr(input.compactionRetainRatio, FOLD_CONFIG_DEFAULTS.retainRatio),
+    compactionMinFoldTokens: positiveIntOr(input.compactionMinFoldTokens, FOLD_CONFIG_DEFAULTS.minFoldTokens),
+    compactionSummaryMaxTokens: positiveIntOr(
+      input.compactionSummaryMaxTokens,
+      FOLD_CONFIG_DEFAULTS.summaryMaxTokens,
+    ),
     schemaVersion: SCHEMA_VERSION,
   });
 }

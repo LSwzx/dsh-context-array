@@ -8,5 +8,13 @@
         spaceRules: 'Shared workspace facts stay in this space unless a more specific space is bound.'
         observeUsage: true
         bootstrapMessages: true
-        compactionMode: observe   # off | observe; observe claims ctx.compaction but NEVER folds (M0-6 verification)
+        # off | observe | fold. `fold` takes over compaction and really folds at the
+        # ratio below (see design doc §6/§7); `observe` only samples and alarms.
+        compactionMode: fold
         compactionWarnTokens: 300000
+        compactionAlarmRatio: 0.7
+        compactionFoldRatio: 0.85      # fold when pressure reaches 85% of the window
+        compactionRetainRatio: 0.3     # keep at least 30% of surface tokens
+        compactionMinFoldTokens: 8000  # never fold a smaller region
+        compactionSummaryMaxTokens: 600
+        enableEmbedding: true

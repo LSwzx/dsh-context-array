@@ -1,6 +1,6 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.2.0)
+# dsh-context-array 产品需求与技术架构文档 (v4.2.1)
 
-整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，其中折叠为已知缺口）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）均已完成并实测；M3/M4 待开工。M2 实测见 `docs/M2-RESULTS.md`，缓存收益见 `docs/CACHE-SAVINGS.md`。
+整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）均已完成并实测；M3/M4 待开工。M2 实测见 `docs/M2-RESULTS.md`，缓存收益见 `docs/CACHE-SAVINGS.md`，折叠实测见 `docs/M1-RESULTS.md` 的 M0-6 节。
 
 ## 0. 前置验证（动手前必须完成）
 
@@ -17,7 +17,7 @@
 | 3 | session_id 从何处获取 | 会话与空间绑定 | **能稳定获取**。`SessionId`（品牌化字符串）即持久会话身份：工具内 `exec.agent.id`；提示词提供方内 `context.agent.id`（`AssembleContext.agent`）；事件侧 `session/created`、`session/event`、`agent/created`；请求侧 `GenerateOptions.sessionId`。见 0.1-③ |
 | 4 | 工具注册方式与参数结构；运行时能否保证工具顺序固定 | L2 | **能**。注册用 `ctx.tools.register(defineTool({name, description, parameters, output, execute, ...}), { when? })`，其中 `output`（schema + render）为必填契约。顺序由 `toolOrder` 配置（须含一次 `<unlisted-tools>` 占位）决定，未配置则**字典序**，权威顺序写入 `request/header`；与注册顺序无关。见 0.1-④ |
 | 5 | 能否通过 API 唤醒空闲会话 | 留言箱是主动推送还是下一轮拉取 | **能，但"唤醒"≠"免费"**。`agent.inject()` 只排队、**不唤醒**，空闲会话实际要等下一次 pre-step 才看到（等价于"下一轮拉取"）；要让空闲会话**立即行动**必须用 `agent.followup()`（开新轮、计费一次模型请求），宿主侧可用 `ctx.schedule.run()`，同树可用 `ctx.subagents.sendMessage()`。主动唤醒受 3.4 的冷却与频率上限约束。见 0.1-⑤ |
-| 6 | 能否替换/禁用默认压缩策略，并在插件里接管压缩（自己做"压缩 = 追加摘要 + 保留原始历史锚点"） | **全局前提（L1–L5 全部依赖它）** | **接管机制已验证（v4.1.5）；"纯追加"仍不成立，折叠策略未实现**。`ctx.compaction` 是能力 seam，`ctx.provide('compaction', 实现)` 可装自己的实现，默认实现 `dsh-compaction-basic` 可用 patch 行 `disabled: true` 关掉；但 seam 的既定语义是"把选中的 surface 区间替换成一个摘要节点"，**不替换就无法缩减 token**。实测：本 profile 里 `compaction-basic` 未加载，插件以 `observe` 模式成功认领 seam（`compaction/provider-installed`），每轮 pre-step 能读到压力（495,613 / 1,048,576 ≈ 47%），且**从不折叠**。见 0.1-⑥ |
+| 6 | 能否替换/禁用默认压缩策略，并在插件里接管压缩（自己做"压缩 = 追加摘要 + 保留原始历史锚点"） | **全局前提（L1–L5 全部依赖它）** | **已接管并已实装折叠（v4.2.1）**。`ctx.compaction` 可被 `ctx.provide` 接管；本插件在 `compactionMode: fold` 下于轮次边界按压力折叠：保留系统头、保留最近一段、把较早区间替换为一条 `compact-checkpoint` 摘要消息（`compaction/start → summary → user/message(replace) → end`）。金丝雀实测：13 个 surface 节点 / 6,855 token 折成 1 条摘要，`history/replace` 已记录，折叠后同会话继续正常应答。"纯追加"仍不成立（不替换就不减 token），因此折叠本身就是一次性的前缀失效代价。见 0.1-⑥ |
 
 ### 0.1 结论细节与证据
 
@@ -58,14 +58,14 @@
 - 同一 subagent 树内：`ctx.subagents.sendMessage()`，运行中的目标在下一步收到、空闲目标直接开启一轮、冷目标可冷恢复（`docs/subsystems/subagent.zh.md`「消息与中断」）。
 - 结论：**能唤醒，但要分清"排队"和"及时"**。`inject()` 不唤醒，空闲会话实际等价于"下一轮才看到"；要让空闲会话立即行动，只能用 `followup()` / `schedule.run()`，代价是一次完整模型轮次，因此必须配合 3.4 的冷却与频率上限。MVP 默认排队，语义上要求即时才唤醒。
 
-**⑥ 压缩接管（v4.1.4 新增，尚未实跑）**
+**⑥ 压缩接管与折叠（v4.1.4 新增，v4.2.1 已实装并实测）**
 
 这一项之前完全漏了，而它会从背后把 L1–L5 的前提掏空：DSH 自带压缩在阈值处**原地替换**中间历史（`surfaceOp: { op: 'replace', startSeq, endSeq }`），替换点之前的 token 仍在，但从替换点起整段前缀与缓存不一致，命中率当场崩，而我们的插件对此毫无感知。
 
 - **能力面**：压缩是"能力 seam"——`ctx.compaction` 是抽象服务（`CompactEngine`：`compactIfNeeded` / `compactNow` / `compactRegion`），文档明确"每个上下文只装载一个实现"。因此两条路都能走：① 用 patch 行 `- id: compaction-basic; disabled: true` 关掉默认实现；② 用 `ctx.provide('compaction', 自己的实现)` 接管（`ctx.provide` 是 fiber 所有的服务注册，同名已提供会抛）。
 - **当前环境实测状态**：本 profile 里 `compaction-basic` 与 `tool-result-pruner` 都是 **inactive**（`cordis_inspect Config.listConfigs` 显示 `include:compaction-basic` / `include:tool-result-pruner` 无激活 fiber），所以现在**没有发生压缩**——M1 的实测数据也因此没有压缩样本。但这是部署现状，不是保证：任何组合启用、或未来 bundle 默认开启，前提立刻失效。`compaction-image-offload` 已随默认组合存在（超图片预算时会替换图片描述），同样是 surface 替换。
 - **"纯追加压缩"不成立**：seam 的成功返回 `CompactionResult`（`shadowedRange` / `shadowedSeqs` / `summarySeq`）本身就意味着选中区间被一个摘要节点替换。真要"只追加、保留原始历史"，token 一个都不会少，窗口迟早撞 `CONTEXT_WINDOW_EXCEEDED`。所以能定的只是**在哪一刻付这一次性代价**，不是能不能避免。
-- **接管方案（待实跑验证）**：
+- **接管方案（v4.2.1 已实现）**：
   1. 关闭 `compaction-basic` + `tool-result-pruner`（patch 行），或接管后让它们的 `when` 条件不成立；
   2. 自己实现 `CompactEngine`：阈值与保留尾部的策略由我们定，折叠只在**轮次边界**发生，折叠范围避开"刚追加的 L5 尾部"；折叠后**立即**让后续请求复用新前缀（新前缀一次写缓存，随后连续命中）；
   3. 观测层订阅 `session/event`：见到 `compaction/start|summary|end` 或任何 `surfaceOp: replace` 就打一条 `event: compaction` 记录，把该轮/该请求从"稳态命中率"统计里**单独标注**；
@@ -73,9 +73,19 @@
 - **必须实跑确认的点**：`ctx.provide('compaction', …)` 在真实 Host 里能否成功装载并拒绝并发；`CompactResult` 的 `compactionCheckpointSource` 替换消息契约；接管后 `agent/pre-step` 的压力判断是否仍由循环触发（说明文字：压力压缩在 `agent/pre-step` 与 `agent/request` 两个入口按 header 执行）；`image-offload` 的替换是否也需禁用。
 - **v4.1.5 实测结果**（详见 `docs/M1-RESULTS.md`）：
   - 本 profile 无 `compaction-basic` 实现者，插件以 `compactionMode: observe` 成功 `ctx.provide('compaction', …)`，`events.jsonl` 记录到 `compaction/provider-installed` 与多轮 `compaction/pressure`（495,613 / 1,048,576）。
-  - `observe` 模式**永不折叠**：`compactIfNeeded`/`compactNow` 返回 `null`，`compactRegion` 抛"未实现"；实测 `history/replace` 计数为 0。
-  - 因此"接管"这一半已验证；**"折叠"这一半没有实现**，也还没有验证 `CompactResult` / checkpoint 契约——那需要真正调用 session 的表层替换 API，属于 M2 之后的工作。
-  - 待复核：究竟何时该折叠。文档原设想"压缩 = 追加摘要 + 保留原历史锚点"只适用于不关心 token 预算的场景；实际必须周期性真折叠并接受一次前缀失效。折叠阈值与保留尾部策略见 §7 待定项。
+- **v4.2.1 折叠实装与实测**（`src/compaction-fold.js` + `src/compact-tool.js`）：
+  - **范围选择**：保留 surface 头（node 0 是系统提示，seam 只允许 `system/message` 改写它，折叠一律从 node 1 起）；
+    在 `turn/start` 事件处找安全边界，保留「至少 `retainRatio` 的 surface token」的最小尾部；被折叠区间必须 ≥ `minFoldTokens`。
+  - **提交契约**（与 `dsh-compaction-basic` 一致）：`compaction/start → compaction/summary → user/message(source.kind='compact-checkpoint', surfaceOp=replace) → compaction/end`；
+    失败时补写带 `error` 的 `compaction/end` 关闭锁。
+  - **金丝雀实测**（一次性 subagent 会话，人工触发 `context_compact`）：
+    `fold-plan` start=12 end=50，13 个节点 / **6,855 token**，保留 12 个节点；
+    `history/replace` 记录 `seq=106, startSeq=12, endSeq=50`；`compaction/folded` 记录 `summarySeq=105, elapsedMs=3375`；
+    折叠后同一会话的下一请求正常（`msgs` 从 100+ 降到 23，`wholeHit` 0.9919，重新建立缓存）。
+  - **踩到的两个真问题**：① `session` 没有 `events` 数组，读日志要用 `snapshotEvents()`/`eventAt(seq)`；
+    ② 折叠区间若包含 node 0 会被 seam 拒绝（`surface replace: node 0 holds the system prompt…`）——所以必须保留系统头。
+  - **默认配置**：`compactionMode: fold`、`foldRatio 0.85`、`retainRatio 0.3`、`minFoldTokens 8000`、`summaryMaxTokens 600`；
+    压力到 `alarmRatio 0.7` 时仍先落一条 `compaction/alarm` 作预警。`context_compact` 工具仅在 `fold` 模式注册，只能折叠调用者自己的会话。
 
 ### 0.2 据验证结论对本设计的强制约束
 
@@ -132,7 +142,7 @@
    - `whole_hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`：仅作成本参考，**不能当架构验收依据**。L5 只追加、L1–L4 不变时它会天然很高（M1 实测长会话 0.9986），这恰好会掩盖"前缀其实没被保护"的情况——必须与 `prefix_hit` 分开记。
    - 前提（实测情况，见 `docs/M1-RESULTS.md`）：① **缓存 TTL 已实测 ≥ 13.5 小时**（会话空闲 808 分钟后首个请求仍命中，`cacheRead` 396,544），原"小时级"假设偏保守；② 跨会话复用是否要求同一账号/同一 key **仍未验证**（无法用前缀不同的会话判定）；③ 压缩轮次单独标注，不计入稳态。
 4. **缓存友好性分级**（第 0 节已验证）：`deepseek-flash` 声明 `systemPromptUpdate: 'in-history'` 与 `toolUpdate: 'addition-only'`——提示词变化追加新的 `system/message`、工具只可追加，二者都落在已有历史之后，故前缀不失效；而重写系统节点（第 0 号节点）、删除工具、改工具定义或改顺序，会从首个变化 token 起使复用失效。设计上应优先使用"追加"类手段。
-5. **压缩是唯一允许"打断前缀"的动作**（M0-6）：DSH 默认压缩是 surface 替换，替换点之后缓存必然失效，且插件必须接管其时机与范围（详见 0.1-⑥）。接管后，折叠策略只允许在轮次边界触发，折叠后立刻让后续请求重建可复用前缀；每次折叠都必须在观测层留标记。
+5. **压缩折叠是唯一允许"打断前缀"的动作**（M0-6，v4.2.1 已实装）：折叠把较早区间替换成一条摘要消息，替换点之后的缓存必然失效，这是**已知的一次性代价**。实现约束：只在轮次边界触发、保留系统头（node 0）、保留至少 `retainRatio` 的尾部、区间不小于 `minFoldTokens`；折叠后立即让后续请求重建可复用前缀，并在 `events.jsonl` 留 `history/replace` / `compaction/folded` 标记。
 6. **前缀改写与缓存的关系：已实测收敛**（M1-4 / `promptSalt` + 工具开关实验）。
    - 该 `in-history` 路由下，改提示词**不会重写系统节点 0**：`systemDigest` 恒定、
      `systemDigestAll` 变化、`systemMessageCount` 增长，DSH 把变化后的提示词作为追加的
@@ -402,7 +412,7 @@ export class MemoryManagerDB {
 
 严格按顺序推进，先验证缓存，后写上层业务。
 
-1. **M0 接口确认**：完成第 0 节六项验证，把结论填回表格。（前五项 v4.1.1 已完成；第六项接管机制 v4.1.5 已实测）
+1. **M0 接口确认**：完成第 0 节六项验证，把结论填回表格。（前五项 v4.1.1 完成；第六项 v4.2.1 完成接管 + 折叠实装与金丝雀实测）
 2. **M1 验证期**：观测与追加层 + 单空间静态建表 + `systemPrompt.section()` 段注册。（v4.1.3 已实现并端到端验证，见 `docs/M1-RESULTS.md`）
    - **M1-1（先做）**：实跑一次真实模型请求，把 `llm/stream` 收到的 `usage` 分块（规范化 `TokenUsage`）原样落盘，并在结论文档里标注"原始 provider JSON 不可达"。据此确认实际路由（provider/model）、`cacheWriteTokens` 是否为 0，以及命中率分母；`llm/stream` 旁路能看到该块即为通过。
    - **M1-2**：用 `llm/stream` 旁路读取 `usage.cacheReadTokens`，按 `cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` 逐请求打印命中率。（已完成，但只得到整段口径）
@@ -422,7 +432,8 @@ export class MemoryManagerDB {
 
 ## 7. 待定问题（尚未决定，不属于已确认设计）
 
-- **压缩折叠是否实装**（v4.2.0 决策：暂不实装，只做接管 + 压力告警）。理由：① 折叠必须调用表层替换 API，写错会破坏用户历史，风险高于当前收益；② 当前本机压力约 51%/1M 窗口，还有空间；③ 折叠参数（阈值、保留尾部、是否改用"新会话 + 摘要种子"）缺少实测依据。已实装 `compaction/alarm`：压力到窗口 80% 时写一条告警事件，提示"折叠未实现，建议开新会话"。要实装折叠时，先补一条受控实验再改。
+- **折叠参数的标定**（v4.2.1 已实装，参数是第一版默认值）：`foldRatio 0.85` / `retainRatio 0.3` / `minFoldTokens 8000` / `summaryMaxTokens 600` 尚未经过多轮回折叠的成本实测；摘要质量也只用一条金丝雀验证过，需要在真实长会话里看折叠后模型是否仍能连贯工作。
+- **折叠后是否需要"摘要引用原 seq 锚点"**：当前摘要文本里不含被折叠区间的 seq 列表（`shadowedSeqs` 在 `compaction/summary` 事件里，可审计），是否要把锚点写进摘要正文供模型回溯，未定。
 - **每轮自动检索并追加 `<memory>` 尚未接线**：目前只有 `memory_search` 工具（按需调用）。自动注入要等 M3 产生真实记忆后再做，否则每轮注入低价值内容反而稀释上下文。
 - **序列起点改声明块是否必然打穿缓存**（低优先残余）：需要两个前缀不同的新会话做对照；正常的运行期增删工具已实测不改变声明块。
 - `prefixHit` 的 `prefixTokens` 目前是字符启发式估算（4 字符/token），不是 provider 真值；是否引入更准的 tokenizer 待定。
@@ -432,6 +443,23 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.2.0 → v4.2.1（M0-6 折叠实装并金丝雀实测，2026-11-22）**
+
+- 新增 `src/compaction-fold.js`：范围选择（保留系统头 node 0、在 `turn/start` 处找安全边界、保留 ≥ `retainRatio`
+  的最小尾部、区间 ≥ `minFoldTokens`）、摘要生成（`ctx.llm.stream`，600 max tokens、带 signal）、
+  提交（`compaction/start → summary → user/message(kind='compact-checkpoint', surfaceOp=replace) → end`，
+  失败补写带 `error` 的 end 关闭锁）、以及 `inspectEntryState` 的锁/开轮检测。
+- 新增 `src/compact-tool.js`：`context_compact` 工具（仅 `fold` 模式注册，只能折叠调用者自己的会话）。
+- `compactionMode` 增为 `off | observe | fold`，默认 `fold`；新增配置 `compactionFoldRatio`（0.85）、
+  `compactionRetainRatio`（0.3）、`compactionMinFoldTokens`（8000）、`compactionSummaryMaxTokens`（600）。
+  `agent/pre-step` 只在 `fold` 模式下变成异步；`observe` 保持同步监听（不改变步骤管线）。
+- **金丝雀实测**：一次性 subagent 会话人工触发 `context_compact` → `fold-plan` start=12/end=50、
+  13 节点 / 6,855 token、保留 12 节点；`history/replace`（seq=106, 12–50）；`compaction/folded`
+  （summarySeq=105, elapsedMs=3375）；折叠后同会话下一请求正常（msgs 100+→23，wholeHit 0.9919）。
+- **两个真问题**：① `session` 没有 `events` 数组，读日志必须用 `snapshotEvents()` / `eventAt(seq)`；
+  ② 折叠区间包含 node 0 会被 seam 拒绝（"node 0 holds the system prompt"），因此实现保留系统头。
+- 单测 133 项全绿（新增 11 项折叠用例：范围/锁/摘要失败/提交失败回滚/降级）。
 
 **v4.1.7 → v4.2.0（M2 完成：本地 embedding + 混合检索，折叠决策，2026-11-22）**
 

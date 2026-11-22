@@ -28,6 +28,10 @@
 5. **BLOB 读出要拷贝**。`node:sqlite` 返回的 `Uint8Array` 的 `byteOffset` 不保证 4 字节对齐，
    直接建 `Float32Array` 视图会抛 `RangeError`。
 6. **本地优先、离线优先**。记忆原文不离开本机；embedding 必须在本地跑。
+7. **折叠历史必须守住三条**：① 永不把 surface node 0（系统提示）纳入折叠区间——seam 只允许
+   `system/message` 改写它；② 只在 `turn/start` 给出的轮次边界折，绝不切断工具调用/结果配对；
+   ③ 拿到 `compaction/start` 锁后，任何失败都要补写带 `error` 的 `compaction/end`，否则之后
+   每次折叠都会被判 busy。折叠是**唯一**允许打断缓存前缀的动作，动它要有测试与金丝雀。
 
 ## 开发环境
 

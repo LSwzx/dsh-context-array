@@ -40,6 +40,7 @@ import { installCompactionTakeover, installHistoryReplacementWatch } from './src
 import { createEmbeddingClient } from './src/embedding/client.js'
 import { createRetriever } from './src/retrieval.js'
 import { createMemorySearchTool } from './src/memory-tool.js'
+import { createContextCompactTool } from './src/compact-tool.js'
 
 export const name = 'dsh-context-array'
 export const inject = ['systemPrompt', 'llm', 'tools']
@@ -85,7 +86,19 @@ export function apply(ctx, rawConfig = {}) {
     warn: warn('compaction'),
     now: () => Date.now(),
   })
-  if (takeover.installed) ctx.logger?.('dsh-context-array')?.info?.('[compaction] seam claimed in observe mode')
+  if (takeover.installed) ctx.logger?.('dsh-context-array')?.info?.(`[compaction] seam claimed in ${takeover.reason} mode`)
+
+  // `fold` mode also exposes manual compaction to the model. Identity is the
+  // caller's own session, so it can only fold itself.
+  if (takeover.installed && takeover.reason === 'fold' && takeover.provider) {
+    try {
+      ctx.tools.register(
+        createContextCompactTool({ compaction: takeover.provider, warn: warn('context-compact') }),
+      )
+    } catch (error) {
+      warn('context-compact')(error)
+    }
+  }
 
   // M2: local embedding + hybrid retrieval, exposed to the model as `memory_search`.
   // The model loads lazily inside a worker on the first query, so activation and

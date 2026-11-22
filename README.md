@@ -8,12 +8,12 @@
 与 **M2**（本地 embedding + 混合检索）的实现，以及 **M0-6 压缩接管机制**、**M1-4 双轨缓存指标**。
 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)、[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)。
 
-> **状态**：M1、M2 已跑通并实测。M0-6 的"接管"已验证（能认领 `ctx.compaction`、能看到压力），
-> 但**折叠策略按决策暂不实装**，改为压力告警（窗口 80% 时写 `compaction/alarm`）。
-> **两个受控实验把"前缀被改动打穿"这条风险基本排除了**：本机这条 `in-history` 路由上，
-> 改提示词不会重写系统节点 0（变化作为追加 `system` 消息进历史）；运行期增删工具也不会改动
-> 请求的声明块（变化以 `developer` 消息的 `tool-addition`/`tool-removal` 追加），`prefixHit`
-> 全程为 1。真正能改写前缀的只剩：非 in-history 路由、新序列起点的声明块变化、压缩替换。
+> **状态**：M1、M2 已跑通并实测；**M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：
+> 保留系统头、在轮次边界把较早区间换成一条 `compact-checkpoint` 摘要，金丝雀实测折了
+> 13 个节点 / 6,855 token 且会话继续正常。**两个受控实验也把"前缀被改动打穿"这条风险排除了**：
+> 该 `in-history` 路由上改提示词不会重写系统节点 0；运行期增删工具也不改声明块，`prefixHit` 恒 1。
+> 真正会打断缓存的是**压缩折叠**本身——这是设计上已知并接受的一次性代价，折叠轮次在
+> `events.jsonl` 里以 `history/replace` / `compaction/folded` 单独标记。
 > M2 的检索能力以 `memory_search` 工具暴露，按需调用（每轮自动注入留到 M3 有真实记忆之后）。
 
 ## 缓存节省测算（真实日志）
@@ -38,7 +38,8 @@
 | 静态存储 | `src/db.js` | 用运行时自带的 `node:sqlite`（无需原生编译）：空间、会话绑定、五维记忆、FTS5 `trigram` 索引与外部内容表触发器、inbox、记忆队列、L4 快照、唤醒日志。 |
 | usage 观测 | `src/observer.js`、`src/prefix.js` | 包裹 `llm/stream` waterfall，原样透传每个分块，同时为每个请求写一行 JSONL：规范化 `usage`、`wholeHit`、**双轨指标 `prefixHit` / `prefixTokens` / `prefixHitTokens`**，以及 `systemDigest` / `systemDigestAll` / `toolsDigest` / `prefixDigest`。 |
 | 追加层 | `src/append.js`、`index.js` | 每个新会话注入一条 bootstrap 快照，走 `agent.inject()`：排队到下一次 `agent/pre-step`，不唤醒 Agent，也不碰已缓存前缀。 |
-| 压缩接管 | `src/compaction.js` | `compactionMode: observe` 时用 `ctx.provide('compaction', …)` 认领 seam，记录压力采样、**从不折叠**；压力到窗口 80% 时写 `compaction/alarm`；同时侦测任何 `surfaceOp: replace` 并写入 `events.jsonl`。 |
+| 压缩接管 | `src/compaction.js`、`src/compaction-fold.js` | `compactionMode: fold` 时接管 `ctx.compaction` 并真的折叠：保留系统头、在轮次边界把较早区间替换成一条摘要（`history/replace`），失败会补写 `compaction/end` 关锁；压力到 `alarmRatio` 先落一条 `compaction/alarm`。 |
+| 手动压缩工具 | `src/compact-tool.js` | `context_compact()`：只在 `fold` 模式注册，只能折叠调用者自己的会话（身份取宿主注入的 `exec.agent.id`）。 |
 | 本地 embedding | `src/embedding/client.js`、`src/embedding/worker.js` | worker 线程加载 `multilingual-e5-small`（384 维，q8 ONNX），主线程只做 async RPC；首次加载约 1.7 s，单条推理中位 12.5 ms，60 条排队时主线程定时器漂移中位 3 ms。 |
 | 混合检索 | `src/db-memories.js`、`src/retrieval.js` | 向量 top-20（点积=余弦）+ FTS5 trigram top-20（短查询 LIKE 兜底），RRF 融合（默认权重 **2:1**），按 token 预算截断，输出 `<memory>` 块；embedding 不可用时自动降级为关键词路。 |
 | 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`，模型不能指定 session/space。 |
@@ -84,9 +85,13 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `spaceId` / `spaceName` / `spaceRules` | `space-default` / `Default space` / … | 首次激活时创建的单一静态空间 |
 | `observeUsage` | `true` | 每个上报 usage 的请求写一行记录 |
 | `bootstrapMessages` | `true` | 每个新会话注入一条 bootstrap 快照 |
-| `compactionMode` | `observe` | `off` 不动部署；`observe` 认领 `ctx.compaction` 但**永不折叠**（实测模式） |
-| `compactionWarnTokens` | `300000` | `observe` 模式下压力采样阈值（token） |
-| `compactionAlarmRatio` | `0.8` | 压力达到窗口该比例时写一条 `compaction/alarm`（折叠未实现的告警） |
+| `compactionMode` | `fold` | `off` 不动部署；`observe` 只采样+告警不折叠；`fold` 接管并真折叠 |
+| `compactionWarnTokens` | `300000` | 压力采样记录阈值（token） |
+| `compactionAlarmRatio` | `0.7` | 压力到窗口该比例时写 `compaction/alarm` |
+| `compactionFoldRatio` | `0.85` | 压力到窗口该比例才自动折叠 |
+| `compactionRetainRatio` | `0.3` | 折叠后至少保留的 surface token 比例 |
+| `compactionMinFoldTokens` | `8000` | 小于该 token 的区间不折叠 |
+| `compactionSummaryMaxTokens` | `600` | 摘要生成的最大输出 token |
 | `promptSaltFile` | `<dataDir>/prompt-salt.txt` | 诊断用：改这个文件可在观测层不停的情况下改 L1，做缓存受控实验 |
 | `enableEmbedding` | `true` | 关掉则只走关键词检索（不启动 worker、不加载模型） |
 | `modelsDir` | `<dataDir>/models` | 本地模型目录 |
@@ -107,12 +112,16 @@ Get-Content "$env:USERPROFILE\.dsh\context-array\events.jsonl" -Tail 3
 ```
 
 每个请求一行，字段含义见 [`docs/DETAIL.md`](docs/DETAIL.md)；`events.jsonl` 记录接管、
-压力采样、告警与历史替换。`memory_search` 在安装后即可用，示例：
+压力采样、告警、折叠与历史替换。工具示例：
 
 ```
 memory_search("前缀缓存会不会因为改提示词失效")
 → 3 hit(s) (vector=true, keyword=true)
 - [space-default/reflection] DeepSeek 前缀缓存实测很耐用：… (score 0.0164)
+
+context_compact()
+→ context_compact: folded surface nodes 12–50 (6855 estimated tokens) into one summary;
+  kept the most recent 12 nodes. compactionId=9069fee1-…            # 仅 fold 模式
 ```
 
 ## 实测结果（整段口径，样本 = 2 个会话 / 98 条请求）
@@ -136,9 +145,9 @@ memory_search("前缀缓存会不会因为改提示词失效")
 
 - 插件只能拿到适配器折算后的规范化 `TokenUsage`，**原始 provider usage JSON 不可达**；
   记录以 `usageSource: "normalized-usage-chunk"` 标注。
-- **压缩只做了"接管"，没有做"折叠"**（按决策暂不实装）：`observe` 认领 seam 但不折叠，
-  压力到窗口 80% 只写一条 `compaction/alarm` 提醒开新会话。折叠要调用表层替换 API，
-  写错会破坏历史，风险高于当前收益；参数也缺实测依据（见设计文档 §7）。
+- **压缩折叠已实装，代价是已知的**：折叠把较早区间替换成一条摘要，替换点之后的缓存会失效一次，
+  之后重新建立。折叠只在轮次边界、保留系统头、保留 ≥30% 尾部时发生；`foldRatio 0.85` 意味着
+  长会话到 85% 窗口才折一次。参数未经多轮标定（见设计文档 §7）。
 - **检索是"按需调用"而不是"每轮自动注入"**：`memory_search` 工具已可用，但自动把 `<memory>`
   块追加到 L5 要等 M3 有真实记忆后再做，否则每轮注入低价值内容反而稀释上下文。
 - **依赖从零变为一个**：`@huggingface/transformers` + onnxruntime，`node_modules` 约 463 MiB，
@@ -150,7 +159,7 @@ memory_search("前缀缓存会不会因为改提示词失效")
 ## 文档
 
 - 设计文档（第 0 节六项前置验证、L1–L5 分层、压缩接管、M2 实测）：[`dsh-context-array-v4.1.md`](dsh-context-array-v4.1.md)
-- M1 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)
+- M1 实测记录（含 M0-6 折叠实测）：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)
 - M2 实测记录（embedding + 检索评测）：[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)
 - 缓存节省测算：[`docs/CACHE-SAVINGS.md`](docs/CACHE-SAVINGS.md)
 - 插件详情页文案：[`docs/DETAIL.md`](docs/DETAIL.md)

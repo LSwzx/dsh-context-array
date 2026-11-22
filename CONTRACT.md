@@ -226,14 +226,42 @@ export function createMemorySearchTool({ db, retriever, warn })
 //    a model can never pass session_id or space_id.
 ```
 
+## `src/compaction-fold.js` (M0-6)
+
+```js
+export function sessionEvents(session)            // snapshotEvents() -> eventAt(seq) fallback; Session has no `events`
+export function inspectEntryState(session)        // -> { openTurn, unmatchedStartSeq }
+export function planFold({ session, measurement, config, onSkip })
+// keeps surface node 0 (the system prompt), folds from node 1 up to a turn/start boundary,
+// retains >= config.retainRatio of surface tokens, requires >= config.minFoldTokens
+export function summarizationMessages(session, shadowedSeqs)
+export async function summarize({ llm, messages, target, config, signal })
+export function commitFold({ session, start, end, shadowedSeqs, shadowedTokenCount, summaryText,
+                             target, maxTokens, usage, turn, keptSeqs })
+// compaction/start -> compaction/summary -> user/message(kind 'compact-checkpoint', surfaceOp replace) -> compaction/end
+// any throw after the lock appends compaction/end with an `error` payload
+export async function foldSession({ ctx, agent, trigger, signal, config, events, warn })
+```
+
+## `src/compact-tool.js` (M0-6)
+
+```js
+export function createContextCompactTool({ compaction, warn })
+// -> ToolDefinition `context_compact` (no parameters); registered only in `fold` mode.
+// execute(args, exec) folds exec.agent's own session via compaction.compactNow and reports
+// { folded, compactionId, shadowedStart, shadowedEnd, shadowedTokenCount, keptNodes, reason? }.
+```
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
-`compactionMode` (`off` | `observe`, defaults to `off`), `compactionWarnTokens`
-(default `300000`), `compactionAlarmRatio` (default `0.8`), `promptSaltFile` (diagnostic;
-defaults to `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`),
-`modelsDir` (default `<dataDir>/models`), derived `dbPath`, `usageLogPath`,
-`eventsLogPath`, `schemaVersion`.
+`compactionMode` (`off` | `observe` | `fold`), `compactionWarnTokens` (default `300000`),
+`compactionAlarmRatio` (default `0.7`), `compactionFoldRatio` (default `0.85`),
+`compactionRetainRatio` (default `0.3`), `compactionMinFoldTokens` (default `8000`),
+`compactionSummaryMaxTokens` (default `600`), `promptSaltFile` (diagnostic; defaults to
+`<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`), `modelsDir`
+(default `<dataDir>/models`), derived `dbPath`, `usageLogPath`, `eventsLogPath`,
+`schemaVersion`.
 
 ## Tests
 

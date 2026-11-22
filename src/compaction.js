@@ -18,9 +18,13 @@
  * `mode: 'observe'`  — claim the seam, log pressure samples, never fold. This is
  *                      the verification build: it proves the takeover path and
  *                      surfaces where a fold would happen, without risking data.
+ * `mode: 'fold'`     — the same seam plus a real fold: summarize the oldest safe
+ *                      range and replace it with one checkpoint message.
  */
 
-export const COMPACTION_MODES = Object.freeze(['off', 'observe'])
+import { foldSession } from './compaction-fold.js'
+
+export const COMPACTION_MODES = Object.freeze(['off', 'observe', 'fold'])
 
 /**
  * Build the `ctx.compaction` implementation used in `observe` mode.
@@ -28,7 +32,7 @@ export const COMPACTION_MODES = Object.freeze(['off', 'observe'])
  * @param {{ mode?: string, events: { append: (record: object) => void }, now?: () => number }} input
  * @returns {{ name: string, compactIfNeeded: Function, compactNow: Function, compactRegion: Function }}
  */
-export function createCompactionProvider({ mode = 'observe', events, now = () => Date.now() }) {
+export function createCompactionProvider({ mode = 'observe', events, now = () => Date.now(), foldOptions = null }) {
   function observe(trigger, agent) {
     events.append({
       type: 'compaction/observe',
@@ -37,6 +41,26 @@ export function createCompactionProvider({ mode = 'observe', events, now = () =>
       at: new Date(now()).toISOString(),
       sessionId: agent?.id ?? null,
     })
+  }
+
+  if (mode === 'fold' && foldOptions !== null) {
+    return {
+      name: 'compaction',
+      /** Automatic policy entry point; a real fold when pressure and safety allow it. */
+      async compactIfNeeded(agent, trigger = 'pressure', signal) {
+        observe(trigger, agent)
+        return foldSession({ ...foldOptions, agent, trigger, signal })
+      },
+      /** Manual compaction entry point: fold regardless of the pressure policy. */
+      async compactNow(agent, signal) {
+        observe('manual', agent)
+        return foldSession({ ...foldOptions, agent, trigger: 'manual', signal })
+      },
+      /** Explicit region folding is not exposed; automatic/manual folding covers M0-6. */
+      async compactRegion() {
+        throw new Error('context-array: compactRegion is not implemented')
+      },
+    }
   }
 
   return {
@@ -54,7 +78,7 @@ export function createCompactionProvider({ mode = 'observe', events, now = () =>
       observe('manual', agent)
       return null
     },
-    /** Region folding is the destructive path and is not implemented yet. */
+    /** Region folding is the destructive path and is not implemented in observe. */
     async compactRegion() {
       throw new Error('context-array: compactRegion is not implemented in observe mode')
     },
@@ -73,11 +97,27 @@ export function createCompactionProvider({ mode = 'observe', events, now = () =>
  * @returns {{ installed: boolean, reason: string }}
  */
 export function installCompactionTakeover({ ctx, config, events, warn = () => {}, now = () => Date.now() }) {
-  if (config.compactionMode !== 'observe') {
+  if (config.compactionMode !== 'observe' && config.compactionMode !== 'fold') {
     return { installed: false, reason: 'off' }
   }
 
-  const provider = createCompactionProvider({ mode: config.compactionMode, events, now })
+  const foldOptions = {
+    ctx,
+    config: {
+      foldRatio: config.compactionFoldRatio,
+      retainRatio: config.compactionRetainRatio,
+      minFoldTokens: config.compactionMinFoldTokens,
+      summaryMaxTokens: config.compactionSummaryMaxTokens,
+    },
+    events,
+    warn,
+  }
+  const provider = createCompactionProvider({
+    mode: config.compactionMode,
+    events,
+    now,
+    foldOptions,
+  })
   try {
     ctx.provide('compaction', provider)
   } catch (error) {
@@ -91,6 +131,8 @@ export function installCompactionTakeover({ ctx, config, events, warn = () => {}
 
   const lastSampleAt = new Map()
   const alarmed = new Set()
+  /** Cooldown for automatic fold attempts, per session. */
+  const lastFoldAttemptAt = new Map()
   const alarmRatio = config.compactionAlarmRatio ?? 0.8
 
   /** Record at most one pressure sample per session per minute; never throws. */
@@ -141,16 +183,54 @@ export function installCompactionTakeover({ ctx, config, events, warn = () => {}
   // `next()` vetoes the chain, `preStep` receives `undefined` and the turn dies
   // with "Cannot read properties of undefined (reading 'kind')". Sampling is a
   // pure side effect, so it always delegates — including after an internal error.
-  ctx.on('agent/pre-step', (payload, next) => {
-    try {
-      samplePressure(payload)
-    } catch (error) {
-      warn(error)
-    }
-    return next()
-  })
+  //
+  // `observe` keeps the listener synchronous so the step pipeline is untouched;
+  // only `fold` pays for an asynchronous summary inside pre-step.
+  if (config.compactionMode === 'fold') {
+    ctx.on('agent/pre-step', async (payload, next) => {
+      try {
+        samplePressure(payload)
+      } catch (error) {
+        warn(error)
+      }
+      try {
+        await maybeFold(payload)
+      } catch (error) {
+        // A failed fold must never veto the step; any durable lock has already
+        // been closed inside foldSession.
+        warn(error)
+      }
+      return next()
+    })
+  } else {
+    ctx.on('agent/pre-step', (payload, next) => {
+      try {
+        samplePressure(payload)
+      } catch (error) {
+        warn(error)
+      }
+      return next()
+    })
+  }
 
-  return { installed: true, reason: 'observe' }
+  /**
+   * Attempt one automatic fold for this pre-step, with a per-session cooldown so a
+   * session that cannot fold is not re-priced on every step.
+   */
+  async function maybeFold(payload) {
+    const agent = payload?.agent
+    if (!agent?.id) return
+    const meter = ctx.get?.('tokenMeter')
+    const pressure = meter?.contextPressure?.(agent.session)
+    const window = pressure?.contextWindow
+    const ratio = window && pressure?.pressureTokens ? pressure.pressureTokens / window : null
+    if (ratio === null || ratio < config.compactionFoldRatio) return
+    if (now() - (lastFoldAttemptAt.get(agent.id) ?? 0) < 300_000) return
+    lastFoldAttemptAt.set(agent.id, now())
+    await provider.compactIfNeeded(agent, 'pressure', payload?.signal)
+  }
+
+  return { installed: true, reason: config.compactionMode, provider }
 }
 
 /**

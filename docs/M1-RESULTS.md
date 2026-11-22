@@ -252,10 +252,47 @@ Get-Content "$env:USERPROFILE\.dsh\context-array\events.jsonl" -Tail 5
 
 1. **只能拿到规范化 usage**。原始 provider JSON 不可达，`usageSource` 字段已标注。
 2. **双轨指标只有 8 个样本**（同一会话、同一天新代码加载后），且 `prefixTokens` 是字符
-   启发式估算，不是 provider 真值；`prefixHit` 依赖"命中=最长前导匹配"的假设，而该假设
-   正被上面那个反常现象挑战。
-3. **压缩接管只验证了"能认领"，没有验证"能折叠"**：折叠策略（何时、折哪段、摘要怎么生成）
-   尚未实现；`observe` 模式下长会话不会被压缩。
-4. TTL 只观测到"≥ 13.5 小时仍有命中"，没有测到失效边界；跨会话同账号复用未做受控实验。
-5. 反复 disable/enable 会让 `systemMessageCount` 增长（每次有效提示词变化追加一份快照），
+   启发式估算，不是 provider 真值。
+3. TTL 只观测到"≥ 13.5 小时仍有命中"，没有测到失效边界；跨会话同账号复用未做受控实验。
+4. 反复 disable/enable 会让 `systemMessageCount` 增长（每次有效提示词变化追加一份快照），
    这是本次实测的人为操作，不是正常运行时行为。
+
+## M0-6 折叠实测（v4.2.1）
+
+折叠从"能不能"变成"做没做对"。用一次性 subagent 会话当金丝雀：它先跑两步工具、读一次
+设计文档攒出历史，然后由模型调用 `context_compact`（只在 `fold` 模式注册）。
+
+`events.jsonl` 的完整链路：
+
+```json
+{"type":"compaction/observe","mode":"fold","trigger":"manual","sessionId":"cc9e31fb…"}
+{"type":"compaction/fold-plan","start":12,"end":50,"shadowedNodes":13,"shadowedTokenCount":6855,"keptNodes":12}
+{"type":"history/replace","eventType":"user/message","seq":106,"startSeq":12,"endSeq":50,"sourceEvents":15}
+{"type":"compaction/folded","compactionId":"9069fee1-…","start":12,"end":50,"shadowedTokenCount":6855,"summarySeq":105,"elapsedMs":3375}
+```
+
+模型侧返回：
+
+```
+context_compact: folded surface nodes 12–50 (6855 estimated tokens) into one summary;
+kept the most recent 12 nodes. compactionId=9069fee1-fdb3-4d33-b3d1-8843337ad236.
+```
+
+折叠后同一会话的下一个请求正常（`msgs` 从 100+ 降到 23，`wholeHit` 0.9919，缓存重新建立），
+随后金丝雀继续应答——**历史替换没有破坏会话**。
+
+### 过程中踩到、并已修掉的两个真问题
+
+1. **`session` 没有 `events` 数组**。最初用 `session.events` 读日志，拿到的是 `undefined`，
+   于是"开轮检测"永远失败、折叠永远报 `NO_OPEN_TURN`。正确读法是 `session.snapshotEvents()`
+   或逐个 `session.eventAt(seq)`（两者都是 @deprecated 但仍是公开 API）。
+2. **折叠区间不能包含 node 0**。seam 的校验会拒绝并抛
+   `surface replace: node 0 holds the system prompt and may be rewritten only by a system/message…`。
+   所以范围选择必须保留系统头，从 node 1 开始折——`compaction-basic` 也是这么做的
+   （它把 system head 单独拼进摘要输入）。
+
+### 参数（第一版，未标定）
+
+`foldRatio 0.85`、`retainRatio 0.3`、`minFoldTokens 8000`、`summaryMaxTokens 600`、
+`alarmRatio 0.7`。金丝雀为了能在小会话里触发，临时把 `retainRatio` 调到 0.02、`minFoldTokens`
+调到 2000，验证完已恢复生产值。**这些参数还没有经过多轮回折叠的成本实测**，见设计文档 §7。
