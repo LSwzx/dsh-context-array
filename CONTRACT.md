@@ -282,6 +282,55 @@ export function createMemoryTools({ db, embedPassage, config, warn })
 - An embedder failure degrades to `embedded:false` (keyword retrieval still works) instead of failing
   the archive.
 
+## `src/spaces.js` (M4)
+
+```js
+export function getSpace(db, id)
+export function listSpacesDetailed(db)          // + memories / sessions counts
+export function createSpace(db, { name, description })      // id = space-<8 hex>
+export function updateSpace(db, { id, name, description })
+export function deleteSpace(db, id)             // refuses DEFAULT_SPACE and non-empty spaces
+export function listMemories(db, { spaceId, limit, includeSuperseded })
+export function deleteMemory(db, id)
+export function listBindings(db)                // [{ session_id, space_id, role, space_name }]
+export function listKnownSessions(db)           // [{ sessionId, links: [{spaceId, role}] }]
+export function bindSessionToSpace(db, { sessionId, spaceId, role })
+export function unbindSessionFromSpace(db, { sessionId, spaceId })
+```
+
+## `src/inbox.js` (M4)
+
+```js
+export const INBOX_SOURCE_KIND = 'context-array-inbox'
+export const DEFAULT_WAKE_MAX_PER_HOUR = 10
+export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, content })   // dedupe by content hash
+export function listInbox(db, { targetSessionId, status, limit })
+export function acknowledgeInbox(db, id)
+export function wakeCountLastHour(db, targetSessionId)
+export function noteWake(db, { targetSessionId, sourceSessionId, inboxId, throttled })
+export function deliverInbox(ctx, { db, targetSessionId, content, wake, maxPerHour, sourceSessionId, inboxId })
+// -> { mode: 'woke' | 'queued' | 'throttled' | 'offline' }
+// wake uses agent.followup(); everything else uses agent.inject(); over-limit wakes still inject.
+```
+
+## `src/http-api.js` (M4)
+
+```js
+export const API_PREFIX = '/api/context-array'
+export function registerContextArrayApi({ ctx, db, config, warn })  // -> disposer (noop without webServer)
+```
+Routes: `GET /health`, `GET /overview`, `POST /spaces/create|/spaces/update|/spaces/delete`,
+`GET /memories?spaceId=&limit=`, `POST /memories/delete`, `POST /bind|/unbind`,
+`GET /queue`, `GET /inbox?targetSessionId=&status=`, `POST /inbox/send|/inbox/ack`.
+Reads are loopback-only; writes additionally require the `x-context-array-ui: 1` header.
+
+## `client.js` (M4)
+
+Hand-written browser bundle (`window.__ModuleLoader__.load({ id, factory })`), no build step.
+Registers `sidebar.panellist` (`id: 'context-array'`, order 40, label `记忆`) and the `main`
+keyed panel (`key: 'context-array'`), plus package CSS through the `styles` builtin. It never
+imports a Harness Client package and never touches another plugin's DOM.
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
@@ -291,8 +340,8 @@ export function createMemoryTools({ db, embedPassage, config, warn })
 `compactionSummaryMaxTokens` (default `600`), `promptSaltFile` (diagnostic; defaults to
 `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`), `modelsDir`
 (default `<dataDir>/models`), `adminSessionIds` (default `[]`),
-`queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), derived
-`dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
+`queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), `wakeMaxPerHour`
+(default `10`), derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
 
 ## Tests
 

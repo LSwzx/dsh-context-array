@@ -12,7 +12,9 @@
  */
 
 import { insertMemory } from './db-memories.js'
+import { acknowledgeInbox, deliverInbox, listInbox, sendInbox } from './inbox.js'
 import { claimNext, enqueueProposal, queueStats, settleClaim } from './queue.js'
+import { bindSessionToSpace, unbindSessionFromSpace } from './spaces.js'
 
 /** JSON schema for the archive return value. */
 const ARCHIVE_OUTPUT = {
@@ -61,6 +63,39 @@ const SETTLE_OUTPUT = {
   },
 }
 
+const BIND_OUTPUT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    bound: { type: 'boolean' },
+    unbound: { type: 'boolean' },
+    spaceId: { type: 'string' },
+    role: { type: 'string' },
+    error: { type: 'string' },
+  },
+}
+
+const INBOX_SEND_OUTPUT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    inboxId: { type: 'string' },
+    deduped: { type: 'boolean' },
+    targetSessionId: { type: 'string' },
+    delivery: { type: 'string' },
+    error: { type: 'string' },
+  },
+}
+
+const INBOX_LIST_OUTPUT = { type: 'object', properties: { messages: { type: 'array' } } }
+
+const INBOX_ACK_OUTPUT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['acknowledged'],
+  properties: { acknowledged: { type: 'boolean' } },
+}
+
 /**
  * Resolve one session's bound spaces and role.
  *
@@ -98,10 +133,11 @@ export function sessionBinding(db, sessionId) {
  * @param {(error: unknown) => void} [input.warn]
  * @returns {object[]} tool definitions
  */
-export function createMemoryTools({ db, embedPassage = null, config = {}, warn = () => {} }) {
+export function createMemoryTools({ db, embedPassage = null, config = {}, warn = () => {}, ctx = null }) {
   const adminIds = new Set(Array.isArray(config.adminSessionIds) ? config.adminSessionIds : [])
   const staleMinutes = config.queueStaleMinutes ?? 10
   const maxRetries = config.queueMaxRetries ?? 3
+  const wakeMaxPerHour = config.wakeMaxPerHour ?? 10
 
   /** Server-side admin check: bound role or deployment allow-list. Never tool args. */
   function isAdmin(sessionId) {
@@ -112,6 +148,11 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
 
   function denied(reason) {
     return { ok: false, reason }
+  }
+
+  /** Bound-spaces lookup reused by bind/unbind/inbox. */
+  function spacesOf(sessionId) {
+    return sessionBinding(db, sessionId).spaceIds
   }
 
   return [
@@ -356,6 +397,166 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
           warn(error)
           return { pending: 0, processing: 0, done: 0, rejected: 0, failed: 0, total: 0, error: String(error?.message ?? error) }
         }
+      },
+    },
+    {
+      name: 'memory_bind',
+      description:
+        'Bind THIS session to one space (M4). `role: admin` is only accepted from a current ' +
+        'central memory manager; a main session may bind additional readable spaces.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['spaceId'],
+        properties: {
+          spaceId: { type: 'string', description: 'Space id, e.g. space-default.' },
+          role: { type: 'string', enum: ['main', 'admin', 'sub'], description: 'Role for this binding (default main).' },
+        },
+      },
+      output: {
+        schema: BIND_OUTPUT,
+        render(args, value) {
+          if (value.error) return [{ type: 'text', text: `memory_bind failed: ${value.error}` }]
+          return [{ type: 'text', text: `memory_bind: ${value.spaceId} → ${value.role}.` }]
+        },
+      },
+      async execute(args, exec) {
+        const sessionId = exec?.agent?.id
+        if (!sessionId) return { bound: false, error: 'NO_SESSION_IDENTITY' }
+        const spaceId = String(args?.spaceId ?? '').trim()
+        const role = String(args?.role ?? 'main')
+        if (role === 'admin' && !isAdmin(sessionId)) return { bound: false, error: 'ADMIN_REQUIRES_ADMIN' }
+        const result = bindSessionToSpace(db, { sessionId, spaceId, role })
+        return result.bound ? { bound: true, spaceId, role } : { bound: false, error: result.reason }
+      },
+    },
+
+    {
+      name: 'memory_unbind',
+      description: 'Remove THIS session\'s binding to one space.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['spaceId'],
+        properties: { spaceId: { type: 'string' } },
+      },
+      output: {
+        schema: BIND_OUTPUT,
+        render(args, value) {
+          return [{ type: 'text', text: value.unbound ? `memory_unbind: ${value.spaceId} removed.` : `memory_unbind: no binding for ${args?.spaceId}.` }]
+        },
+      },
+      async execute(args, exec) {
+        const sessionId = exec?.agent?.id
+        if (!sessionId) return { unbound: false, error: 'NO_SESSION_IDENTITY' }
+        const spaceId = String(args?.spaceId ?? '').trim()
+        return { ...unbindSessionFromSpace(db, { sessionId, spaceId }), spaceId }
+      },
+    },
+
+    {
+      name: 'inbox_send',
+      description:
+        'Queue a message for another session (M4). Queue-only is cheap: it lands in the target ' +
+        'next step without starting a turn. `wake: true` starts a real turn and is rate-limited.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['targetSessionId', 'content'],
+        properties: {
+          targetSessionId: { type: 'string', description: 'Exact target session id.' },
+          content: { type: 'string', description: 'Message text.' },
+          wake: { type: 'boolean', description: 'Start a turn on the target (throttled).' },
+        },
+      },
+      output: {
+        schema: INBOX_SEND_OUTPUT,
+        render(args, value) {
+          if (value.error) return [{ type: 'text', text: `inbox_send failed: ${value.error}` }]
+          return [
+            {
+              type: 'text',
+              text: `inbox_send: ${value.inboxId} → ${value.targetSessionId} (${value.delivery}${value.deduped ? ', deduped' : ''}).`,
+            },
+          ]
+        },
+      },
+      async execute(args, exec) {
+        const sessionId = exec?.agent?.id
+        const targetSessionId = String(args?.targetSessionId ?? '').trim()
+        const content = String(args?.content ?? '').trim()
+        if (!sessionId || targetSessionId === '' || content === '') return { error: 'TARGET_AND_CONTENT_REQUIRED' }
+        const spaceId = spacesOf(sessionId)[0] ?? config.spaceId
+        const inbox = sendInbox(db, { spaceId, sourceSessionId: sessionId, targetSessionId, content })
+        const delivery = deliverInbox(ctx, {
+          db,
+          targetSessionId,
+          content,
+          wake: args?.wake === true,
+          maxPerHour: wakeMaxPerHour,
+          inboxId: inbox.id,
+          sourceSessionId: sessionId,
+        })
+        return { inboxId: inbox.id, deduped: inbox.deduped, targetSessionId, delivery: delivery.mode }
+      },
+    },
+
+    {
+      name: 'inbox_list',
+      description: 'List inbox messages addressed to THIS session (pending by default).',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          status: { type: 'string', enum: ['pending', 'read', 'all'] },
+          limit: { type: 'integer' },
+        },
+      },
+      output: {
+        schema: INBOX_LIST_OUTPUT,
+        render(args, value) {
+          if (!value.messages?.length) return [{ type: 'text', text: 'inbox_list: empty.' }]
+          return [
+            {
+              type: 'text',
+              text: value.messages
+                .map((row) => `${row.id} [${row.status}] from ${row.source_session_id ?? 'unknown'}: ${String(row.content).slice(0, 200)}`)
+                .join('\n'),
+            },
+          ]
+        },
+      },
+      async execute(args, exec) {
+        const sessionId = exec?.agent?.id
+        if (!sessionId) return { messages: [] }
+        const status = String(args?.status ?? 'pending')
+        return {
+          messages: listInbox(db, {
+            targetSessionId: sessionId,
+            status: status === 'all' ? undefined : status,
+            limit: args?.limit,
+          }),
+        }
+      },
+    },
+
+    {
+      name: 'inbox_ack',
+      description: 'Mark one inbox message read.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['inboxId'],
+        properties: { inboxId: { type: 'string' } },
+      },
+      output: {
+        schema: INBOX_ACK_OUTPUT,
+        render(args, value) {
+          return [{ type: 'text', text: value.acknowledged ? `inbox_ack: ${args?.inboxId} read.` : `inbox_ack: ${args?.inboxId} was not pending.` }]
+        },
+      },
+      async execute(args) {
+        return acknowledgeInbox(db, String(args?.inboxId ?? '').trim())
       },
     },
   ]

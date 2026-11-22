@@ -1,6 +1,6 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.2.2)
+# dsh-context-array 产品需求与技术架构文档 (v4.3.0)
 
-整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）均已完成并实测；M4 待开工。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
+整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
 ## 0. 前置验证（动手前必须完成）
 
@@ -218,6 +218,16 @@
   - **去重**：dedupe_key = hash(内容) + 小时桶（YYYYMMDDHH），同源同内容同一小时内只保留一条，之后可再次发送。
 - **权限（身份由宿主注入，绝不来自工具参数）**：`check_inbox` 的调用者身份取宿主执行上下文里的 `exec.agent.id`（工具拿到的 `ToolExecution.agent`），**不是工具参数**——模型无法填别人的 session id，一次提示注入也穿不了；空间归属由后端按该 `session_id` 查 `session_space_links` 得到，`space_id` 同样不接受模型指定。判定规则：主会话可读其所绑定空间内的全部留言；子会话只能读定向给自己的；任何会话都不能读未绑定空间的留言。
 - **并发写**：多会话同时写库，连接必须 `PRAGMA journal_mode = WAL` + `PRAGMA busy_timeout = 5000`（见 4 节），否则 `SQLITE_BUSY` 会随机炸。
+- **v4.3.0 实现与实测**（`src/inbox.js`、`src/spaces.js`、`src/http-api.js`、`client.js`，详见 `docs/M4-RESULTS.md`）：
+  - 已实现：排队 = `agent.inject({content, source:{kind:'context-array-inbox'}})`；唤醒 = `agent.followup(...)`；
+    滑动小时限流（`wakeMaxPerHour`，默认 10）超限时**降级为 inject 排队并记 throttled**，不丢弃；
+    去重键沿用 `crypto.randomUUID()` + `dedupe_key`（内容哈希）并复用 `inbox` 的 UNIQUE 约束。
+  - 工具：`inbox_send` / `inbox_list` / `inbox_ack`（身份取 `exec.agent.id`，目标只能由参数指定 id，
+    空间来自发送者绑定；读侧只列定向给本会话的行）。
+  - 面板：侧边栏 `sidebar.panellist` 图标 + `main` 面板（四个页签：空间 / 记忆 / 队列 / 留言箱），
+    数据经 `/api/context-array`（读 loopback-only，写额外要求 `x-context-array-ui: 1`）。
+  - 保留未实现：`hop_count` 自增与"本轮由哪条留言触发"的 `agent/inbox/claimed` 归因（需要消费事件流，
+    当前只存字段、不推进）；`ctx.schedule.run()` 投递路径未接。
 
 ## 4. 数据库设计 (SQLite)
 
@@ -444,7 +454,11 @@ export class MemoryManagerDB {
    领取 → 分类判断 → 本地算向量 → 入库，含取代与回滚。实测 入队 → 原子领取（retry 1）→ 归档
    （embedded=true）→ 检索命中 top-1；非管理员调用被 `NOT_ADMIN` 拒绝；队列过期接管、重试上限、
    去重与终态均有单测覆盖。
-5. **M4 通信期**：留言箱（排队 + 唤醒 + 限流）+ 多空间隔离 + DSH 侧会话绑定与记忆浏览 UI。
+5. **M4 通信期**：（v4.3.0 已完成并实测，见 `docs/M4-RESULTS.md`）留言箱（排队 + 唤醒 + 限流）+
+   多空间隔离 + DSH 侧会话绑定与记忆浏览 UI。实测：侧边栏图标与主面板实时注册成功
+   （`sidebar.panellist` order 40 + `main` key `context-array`），宿主 API `/api/context-array/health`
+   与 `/overview` 返回真实存储数据；写接口的 loopback + `x-context-array-ui` 守卫、空间删除保护、
+   留言排队/唤醒/限流均有单测覆盖。
 
 ## 7. 待定问题（尚未决定，不属于已确认设计）
 
@@ -459,6 +473,27 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.2.2 → v4.3.0（M4 留言箱 + 多空间 + 侧边栏 UI，2026-11-22）**
+
+- 新增 `src/spaces.js`：空间增删改查（默认空间、非空空间拒删）、绑定 upsert/解绑、记忆浏览（过滤已取代）、
+  单条记忆删除、已知会话列表。
+- 新增 `src/inbox.js`：留言入库（内容哈希去重）、排队（`agent.inject`，不唤醒）、唤醒（`agent.followup`，
+  滑动小时限流 `wakeMaxPerHour`，超限降级为排队并记 `throttled`）、已读标记、唤醒计数。
+- 新增 `src/http-api.js`：`/api/context-array` 前缀路由（overview/spaces/memories/bind/unbind/queue/inbox），
+  读接口 loopback-only，写接口额外要求 `x-context-array-ui: 1`；无 webServer 的部署自动跳过。
+- 新增 `client.js` 与 `package.json` 的 `dsh.client` 声明：侧边栏 `sidebar.panellist` 图标（order 40）+ 
+  `main` 面板（key `context-array`），四个页签（空间 / 记忆 / 队列 / 留言箱），全部使用 `--dsw-alias-*`
+  主题 token，不引入 Harness Client 包、不 portal、不读别人 DOM。
+- 工具新增：`memory_bind` / `memory_unbind`（身份取 `exec.agent.id`，`role: admin` 需已是管理员）、
+  `inbox_send` / `inbox_list` / `inbox_ack`。
+- 配置新增：`wakeMaxPerHour`（默认 10）。
+- **实测**（`docs/M4-RESULTS.md`）：侧边栏与主面板在运行中的页面热加载并 active；`/health` 返回
+  `ok=true`，`/overview` 返回真实 1 空间 / 13 绑定 / 13 会话；写接口守卫与空空间保护单测通过；
+  留言的排队/唤醒/限流/已读单测通过。
+- **保留未实现**：留言 `hop_count` 自增与 `agent/inbox/claimed` 归因；`ctx.schedule.run()` 投递；
+  面板未做视觉美化（用户明确要求暂不美化）；视觉与点击流未做浏览器级验证（无浏览器控制）。
+- 单测 164 项全绿（新增 15 项 spaces/inbox/http-api + 2 项工具用例）。
 
 **v4.2.1 → v4.2.2（M3 中央记忆管理员与异步队列，2026-11-22）**
 

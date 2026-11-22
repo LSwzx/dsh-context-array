@@ -199,3 +199,62 @@ test('memory_queue_stats is admin-only and counts each status', async (t) => {
   assert.equal(stats.pending, 2)
   assert.equal(stats.total, 2)
 })
+
+test('memory_bind binds the caller and refuses an admin role to a non-admin', async (t) => {
+  const { db, byName } = fixture(t)
+  const space = await byName.memory_archive.execute({ content: 'x', dimension: 'fact', spaceId: OTHER_SPACE }, asAdmin)
+  assert.equal(space.error, 'SPACE_NOT_BOUND')
+
+  // The admin is bound only to SPACE; OTHER_SPACE is bindable by the admin itself.
+  const bound = await byName.memory_bind.execute({ spaceId: OTHER_SPACE }, asAdmin)
+  assert.equal(bound.bound, true)
+  assert.equal(bound.role, 'main')
+  assert.equal(sessionBinding(db, ADMIN).spaceIds.includes(OTHER_SPACE), true)
+
+  const escalate = await byName.memory_bind.execute({ spaceId: SPACE, role: 'admin' }, asMain)
+  assert.equal(escalate.error, 'ADMIN_REQUIRES_ADMIN')
+
+  const unbound = await byName.memory_unbind.execute({ spaceId: OTHER_SPACE }, asAdmin)
+  assert.equal(unbound.unbound, true)
+})
+
+test('inbox tools queue for another session and read own messages', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-tools-'))
+  const resolved = resolveConfig({ dataDir, spaceId: SPACE })
+  const opened = openStore(resolved)
+  ensureDefaultSpace(opened.db, resolved)
+  bindSessionSpaces(opened.db, MAIN, [SPACE], 'main')
+  bindSessionSpaces(opened.db, ADMIN, [SPACE], 'admin')
+  t.after(() => {
+    opened.close()
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  })
+
+  const calls = { inject: 0, followup: 0 }
+  const targetAgent = {
+    inject() {
+      calls.inject += 1
+    },
+    followup() {
+      calls.followup += 1
+    },
+  }
+  const ctx = { get: (name) => (name === 'agents' ? { get: (id) => (id === ADMIN ? targetAgent : undefined) } : undefined) }
+  const tools = createMemoryTools({ db: opened.db, embedPassage: null, config: {}, ctx })
+  const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
+
+  const sent = await byName.inbox_send.execute(
+    { targetSessionId: ADMIN, content: 'remember the deploy window', wake: true },
+    asMain,
+  )
+  assert.equal(sent.delivery, 'woke')
+  assert.equal(calls.followup, 1)
+
+  const listed = await byName.inbox_list.execute({}, asAdmin)
+  assert.equal(listed.messages.length, 1)
+  assert.equal(listed.messages[0].source_session_id, MAIN)
+
+  const acked = await byName.inbox_ack.execute({ inboxId: listed.messages[0].id }, asAdmin)
+  assert.equal(acked.acknowledged, true)
+  assert.equal((await byName.inbox_list.execute({}, asAdmin)).messages.length, 0)
+})

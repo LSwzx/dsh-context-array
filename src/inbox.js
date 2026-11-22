@@ -1,0 +1,147 @@
+/**
+ * Inbox (M4): durable queued messages between sessions, with an optional wake.
+ *
+ * Two delivery modes, exactly as the design doc requires:
+ * - queue only → `agent.inject()`: cheap, model-facing context that lands in the next
+ *   admitted step without starting one (no token spend on its own);
+ * - wake → `agent.followup()`: starts a real turn, therefore billed, therefore
+ *   throttled by a sliding-hour limit and recorded in `inbox_wake_log`.
+ *
+ * The durable row is written first: a failed wake leaves the message visible in the
+ * inbox rather than losing it.
+ */
+
+import crypto from 'node:crypto'
+
+/** Source kind recorded on the injected user-role message. */
+export const INBOX_SOURCE_KIND = 'context-array-inbox'
+
+/** Default sliding-hour wake limit per target session. */
+export const DEFAULT_WAKE_MAX_PER_HOUR = 10
+
+/** Stable dedupe key for one (space, source, target, content) tuple. */
+export function inboxDedupeKey(content) {
+  return crypto.createHash('sha256').update(String(content)).digest('hex').slice(0, 32)
+}
+
+/**
+ * Store one inbox message.
+ *
+ * @returns {{ id: string, deduped: boolean }}
+ */
+export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, content }) {
+  const id = crypto.randomUUID()
+  const dedupe = inboxDedupeKey(content)
+  const existing = db
+    .prepare(
+      `SELECT id FROM inbox
+        WHERE space_id = ? AND source_session_id IS ? AND target_session_id IS ? AND dedupe_key = ?`,
+    )
+    .get(spaceId, sourceSessionId, targetSessionId, dedupe)
+  if (existing) return { id: existing.id, deduped: true }
+
+  db.prepare(
+    `INSERT INTO inbox (id, space_id, source_session_id, target_session_id, content, dedupe_key, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+  ).run(id, spaceId, sourceSessionId, targetSessionId, String(content), dedupe)
+  return { id, deduped: false }
+}
+
+/** Inbox rows for one target (or all targets when omitted), newest first. */
+export function listInbox(db, { targetSessionId, status = 'pending', limit = 50 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200)
+  const conditions = []
+  const params = []
+  if (targetSessionId) {
+    conditions.push('i.target_session_id = ?')
+    params.push(targetSessionId)
+  }
+  if (status) {
+    conditions.push('i.status = ?')
+    params.push(status)
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  return db
+    .prepare(
+      `SELECT i.id, i.space_id, s.name AS space_name, i.source_session_id, i.target_session_id,
+              i.content, i.status, i.created_at
+         FROM inbox AS i
+         LEFT JOIN memory_spaces AS s ON s.id = i.space_id
+         ${where}
+        ORDER BY i.created_at DESC
+        LIMIT ?`,
+    )
+    .all(...params, safeLimit)
+}
+
+/** Mark one message read. */
+export function acknowledgeInbox(db, id) {
+  const result = db.prepare("UPDATE inbox SET status = 'read' WHERE id = ? AND status = 'pending'").run(id)
+  return { acknowledged: result.changes === 1 }
+}
+
+/** How many wakes this target already consumed in the trailing hour. */
+export function wakeCountLastHour(db, targetSessionId) {
+  return db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM inbox_wake_log
+        WHERE target_session_id = ? AND throttled = 0 AND at >= datetime('now', '-1 hour')`,
+    )
+    .get(targetSessionId).n
+}
+
+/** Record one wake attempt (delivered or throttled). */
+export function noteWake(db, { targetSessionId, sourceSessionId, inboxId, throttled }) {
+  db.prepare(
+    'INSERT INTO inbox_wake_log (target_session_id, source_session_id, inbox_id, throttled) VALUES (?, ?, ?, ?)',
+  ).run(targetSessionId, sourceSessionId ?? null, inboxId ?? null, throttled ? 1 : 0)
+}
+
+/** Wrap text as the user-role message the agent inbox accepts. */
+function inboxMessage(content) {
+  return {
+    content: [{ type: 'text', text: String(content) }],
+    source: { kind: INBOX_SOURCE_KIND },
+  }
+}
+
+/**
+ * Deliver one message to a live agent.
+ *
+ * @param {any} ctx plugin context (uses `ctx.get('agents')`)
+ * @param {{ targetSessionId: string, content: string, wake?: boolean, maxPerHour?: number,
+ *           sourceSessionId?: string, inboxId?: string }} request
+ * @returns {{ mode: 'woke'|'queued'|'throttled'|'offline', targetSessionId: string, wakeCount?: number }}
+ */
+export function deliverInbox(ctx, request) {
+  const { targetSessionId, content, wake = false, maxPerHour = DEFAULT_WAKE_MAX_PER_HOUR } = request
+  const db = request.db
+  const agents = ctx?.get?.('agents')
+  const agent = agents?.get?.(targetSessionId)
+  if (!agent) return { mode: 'offline', targetSessionId }
+
+  const message = inboxMessage(content)
+  const canInject = typeof agent.inject === 'function'
+  const canWake = typeof agent.followup === 'function'
+
+  if (!wake) {
+    if (!canInject) return { mode: 'offline', targetSessionId }
+    agent.inject(message)
+    return { mode: 'queued', targetSessionId }
+  }
+
+  const used = db ? wakeCountLastHour(db, targetSessionId) : 0
+  if (used >= maxPerHour) {
+    if (db) noteWake(db, { targetSessionId, sourceSessionId: request.sourceSessionId, inboxId: request.inboxId, throttled: true })
+    if (canInject) agent.inject(message)
+    return { mode: 'throttled', targetSessionId, wakeCount: used }
+  }
+
+  if (!canWake) {
+    if (canInject) agent.inject(message)
+    return { mode: 'queued', targetSessionId }
+  }
+  agent.followup(message)
+  if (db) noteWake(db, { targetSessionId, sourceSessionId: request.sourceSessionId, inboxId: request.inboxId, throttled: false })
+  return { mode: 'woke', targetSessionId, wakeCount: used + 1 }
+}

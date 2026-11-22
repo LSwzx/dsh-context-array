@@ -126,6 +126,11 @@ export function resolveConfig(raw) {
       Number.isSafeInteger(input.queueMaxRetries) && input.queueMaxRetries > 0
         ? input.queueMaxRetries
         : 3,
+    // M4: how many wake-ups one target session may receive per trailing hour.
+    wakeMaxPerHour:
+      Number.isSafeInteger(input.wakeMaxPerHour) && input.wakeMaxPerHour > 0
+        ? input.wakeMaxPerHour
+        : 10,
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),

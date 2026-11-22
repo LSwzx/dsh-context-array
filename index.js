@@ -45,6 +45,7 @@ import { createRetriever } from './src/retrieval.js'
 import { createMemorySearchTool } from './src/memory-tool.js'
 import { createContextCompactTool } from './src/compact-tool.js'
 import { createMemoryTools } from './src/memory-tools.js'
+import { registerContextArrayApi } from './src/http-api.js'
 
 export const name = 'dsh-context-array'
 export const inject = ['systemPrompt', 'llm', 'tools']
@@ -130,11 +131,21 @@ export function apply(ctx, rawConfig = {}) {
       embedPassage: embedder ? (text) => embedder.embedPassage(text) : null,
       config,
       warn: warn('memory-tools'),
+      ctx,
     })) {
       ctx.tools.register(tool)
     }
   } catch (error) {
     warn('memory-tools')(error)
+  }
+
+  // M4: the sidebar panel's Host API. Optional: deployments without a web server
+  // simply never expose the panel's data.
+  try {
+    const disposeApi = registerContextArrayApi({ ctx, db: store.db, config, warn: warn('http-api') })
+    ctx.effect(() => disposeApi, 'context-array:http-api')
+  } catch (error) {
+    warn('http-api')(error)
   }
 
   // L1 and L3 are global and static, so every session on this deployment shares

@@ -8,15 +8,15 @@
 与 **M2**（本地 embedding + 混合检索）的实现，以及 **M0-6 压缩接管机制**、**M1-4 双轨缓存指标**。
 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)、[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)。
 
-> **状态**：M1、M2、M3 已跑通并实测。**M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：
-> 保留系统头、在轮次边界把较早区间换成一条 `compact-checkpoint` 摘要，金丝雀实测折了
-> 13 个节点 / 6,855 token 且会话继续正常。**两个受控实验也把"前缀被改动打穿"这条风险排除了**：
-> 该 `in-history` 路由上改提示词不会重写系统节点 0；运行期增删工具也不改声明块，`prefixHit` 恒 1。
-> 真正会打断缓存的是**压缩折叠**本身——这是设计上已知并接受的一次性代价，折叠轮次在
-> `events.jsonl` 里以 `history/replace` / `compaction/folded` 单独标记。
-> **M3** 中央记忆管理员与异步队列已跑通：普通会话 `memory_propose` 入队，管理员
-> `memory_queue_claim` → `memory_archive` 入库（本地 embedding），越权调用被服务端拒绝。
-> M4（留言箱 + 多空间 UI）待开工。
+> **状态**：M1–M4 全部完成并实测。
+> **M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：保留系统头、在轮次边界把较早区间换成一条
+> `compact-checkpoint` 摘要，金丝雀实测折了 13 个节点 / 6,855 token 且会话继续正常。
+> **两个受控实验也把"前缀被改动打穿"这条风险排除了**：该 `in-history` 路由上改提示词不会重写系统节点 0；
+> 运行期增删工具也不改声明块，`prefixHit` 恒 1。真正会打断缓存的是**压缩折叠**本身——这是设计上已知并接受
+> 的一次性代价，折叠轮次在 `events.jsonl` 里以 `history/replace` / `compaction/folded` 单独标记。
+> **M3** 中央记忆管理员与异步队列已跑通（入队 → 原子领取 → 归档 → 检索召回）。
+> **M4** 留言箱（排队/唤醒/限流）+ 多空间 + 侧边栏面板已跑通：左侧边栏最后一个图标「记忆」打开面板，
+> 可管理空间、浏览/删除记忆、查看队列、给其他会话发留言。
 
 ## 缓存节省测算（真实日志）
 
@@ -46,6 +46,8 @@
 | 混合检索 | `src/db-memories.js`、`src/retrieval.js` | 向量 top-20（点积=余弦）+ FTS5 trigram top-20（短查询 LIKE 兜底），RRF 融合（默认权重 **2:1**），按 token 预算截断，输出 `<memory>` 块；embedding 不可用时自动降级为关键词路。 |
 | 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`，模型不能指定 session/space。 |
 | 记忆管理员 | `src/queue.js`、`src/memory-tools.js`、`src/prompt.js` | `memory_propose` 任何会话只入队；`memory_queue_claim` / `memory_archive` / `memory_queue_settle` / `memory_queue_stats` 仅管理员。队列原子领取、过期接管、重试上限、小时桶去重；归档本地算 embedding、校验绑定空间、取代失败整体回滚；管理员会话额外注入防注入 L3 段。 |
+| 留言箱与多空间 | `src/inbox.js`、`src/spaces.js`、`src/http-api.js` | `inbox_send(wake?)` 排队走 `agent.inject`（不唤醒），唤醒走 `agent.followup` 并受每小时 10 次限流（超限降级排队）；工具 `memory_bind` / `memory_unbind` / `inbox_list` / `inbox_ack`。空间增删改查、绑定、记忆浏览/删除经 `/api/context-array`（读 loopback-only，写需 `x-context-array-ui: 1`）。 |
+| 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板四个页签（空间 / 记忆 / 队列 / 留言箱）；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
 
 ## 三条最容易搞混的口径
 
@@ -101,6 +103,7 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `adminSessionIds` | `[]` | 中央记忆管理员的会话 id（部署配置，模型不可写；M4 会有 UI 绑定） |
 | `queueStaleMinutes` | `10` | 领取超过该分钟的 processing 行回到 pending |
 | `queueMaxRetries` | `3` | 重试达到该值的 pending 行置 failed |
+| `wakeMaxPerHour` | `10` | 同一目标会话每小时最多被唤醒次数（超限降级为排队） |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
 > 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，
@@ -170,6 +173,7 @@ context_compact()
 - M1 实测记录（含 M0-6 折叠实测）：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)
 - M2 实测记录（embedding + 检索评测）：[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)
 - M3 实测记录（管理员 + 异步队列）：[`docs/M3-RESULTS.md`](docs/M3-RESULTS.md)
+- M4 实测记录（留言箱 + 多空间 + 侧边栏 UI）：[`docs/M4-RESULTS.md`](docs/M4-RESULTS.md)
 - 缓存节省测算：[`docs/CACHE-SAVINGS.md`](docs/CACHE-SAVINGS.md)
 - 插件详情页文案：[`docs/DETAIL.md`](docs/DETAIL.md)
 - 模块契约：[`CONTRACT.md`](CONTRACT.md)

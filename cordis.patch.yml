@@ -25,3 +25,4 @@
           - ef62b67e-09a8-4f18-9424-c7b3aa449cef
         queueStaleMinutes: 10
         queueMaxRetries: 3
+        wakeMaxPerHour: 10   # M4 inbox wake rate limit per target session
