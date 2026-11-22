@@ -99,10 +99,12 @@ Get-Content "$env:USERPROFILE\.dsh\context-array\usage.jsonl" -Tail 3
 - M1 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)
 - 插件详情页文案：[`docs/DETAIL.md`](docs/DETAIL.md)
 - M1 实现的模块契约：[`CONTRACT.md`](CONTRACT.md)
+- 贡献流程与不可协商的规则：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 许可证：[`LICENSE`](LICENSE)
 
 前置验证取自 DSH `0.2.2-rc.3`，M1 端到端跑在 `0.2.2-rc.5`（Desktop profile，Electron + Node 24.21，
 内置 SQLite 3.53.4）。
 
 ## 许可证
 
-MIT
+[MIT](LICENSE) © 2026 LSwzx。贡献即表示同意以同一许可授权。

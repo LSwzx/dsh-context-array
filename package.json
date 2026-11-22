@@ -18,6 +18,8 @@
     "cordis.patch.yml",
     "README.md",
     "CONTRACT.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
     "dsh-context-array-v4.1.md"
   ],
   "scripts": {
