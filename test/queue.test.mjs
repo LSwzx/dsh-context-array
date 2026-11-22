@@ -9,7 +9,7 @@ import { test } from 'node:test'
 
 import { resolveConfig } from '../src/config.js'
 import { openStore } from '../src/db.js'
-import { claimNext, enqueueProposal, queueStats, settleClaim } from '../src/queue.js'
+import { claimNext, enqueueProposal, getQueueItem, listQueueItems, queueStats, settleClaim } from '../src/queue.js'
 
 function store(t) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-queue-'))
@@ -108,4 +108,48 @@ test('queueStats reports every status and a total', (t) => {
   assert.equal(stats.done, 1)
   assert.equal(stats.rejected, 1)
   assert.equal(stats.processing, 0)
+})
+
+test('listQueueItems exposes the UI fields and flags stuck claims', (t) => {
+  const db = store(t)
+  const pending = enqueueProposal(db, { sourceSessionId: 's1', rawContent: 'x'.repeat(300), now: fixedNow })
+  const stuck = enqueueProposal(db, { sourceSessionId: 's2', rawContent: 'stuck one', now: fixedNow })
+  const failed = enqueueProposal(db, { sourceSessionId: 's2', rawContent: 'poison', now: fixedNow })
+  db.prepare('UPDATE memory_queue SET status = ?, retry_count = ?, error = ? WHERE id = ?').run(
+    'failed',
+    3,
+    'SUPERSEDE_FAILED: nope',
+    failed.id,
+  )
+  claimNext(db, { staleMinutes: 10, maxRetries: 3 })
+  db.prepare('UPDATE memory_queue SET status = ?, claimed_at = NULL WHERE id = ?').run('pending', pending.id)
+  db.prepare('UPDATE memory_queue SET status = ?, claimed_at = datetime(\'now\', ?) WHERE id = ?').run(
+    'processing',
+    '-30 minutes',
+    stuck.id,
+  )
+
+  const listing = listQueueItems(db, { staleMinutes: 10, maxRetries: 3 })
+  assert.equal(listing.total, 3)
+  assert.equal(listing.stuckCount, 1)
+  assert.equal(listing.stuckAfterSeconds, 600)
+  assert.equal(listing.maxRetries, 3)
+
+  const byId = new Map(listing.items.map((item) => [item.id, item]))
+  assert.equal(byId.get(pending.id).status, 'pending')
+  assert.equal(byId.get(pending.id).content_preview.length, 200)
+  assert.equal(byId.get(pending.id).content_length, 300)
+  assert.equal(byId.get(stuck.id).claimed_ago_seconds >= 1700, true)
+  assert.equal(byId.get(failed.id).retry_count, 3)
+  assert.match(byId.get(failed.id).error, /SUPERSEDE_FAILED/)
+
+  const failedOnly = listQueueItems(db, { status: 'failed', staleMinutes: 10 })
+  assert.deepEqual(
+    failedOnly.items.map((item) => item.id),
+    [failed.id],
+  )
+
+  const full = getQueueItem(db, pending.id)
+  assert.equal(full.raw_content.length, 300)
+  assert.equal(getQueueItem(db, 'missing'), null)
 })

@@ -93,6 +93,26 @@ GET  /api/context-array/overview → spaces=1, bindings=13, sessions=13
 - **唤醒的 followup 时序**：单测用 stub agent 验证了调用与限流记录；真实"发一条唤醒后目标会话立刻开始一轮"未在本里程碑实测（会消耗一次真实轮次）。
 - **嵌入到 `pnpm run dev:web` 的 HMR 流程**：本插件是手写 bundle，无构建步骤；修改 `client.js` 后由 client-modules 重新组合并热加载，已由本次启用验证。
 
+## M4 收尾：口径修正 + 队列页（v4.3.1）
+
+实现四页签时按评审意见做了以下修正：
+
+1. **空间删除口径**：`deleteSpace` 只按有效记忆判定非空，并连同该空间的已取代记忆行、`inbox` 行一起清除；
+   列表计数与禁用条件同口径。后端未更新前的兜底提示会说明"含已取代的旧记忆共 N 条，面板暂时无法清理"。
+2. **记忆筛选/分页**：`GET /memories` 增加 `dimension`、`offset`，返回 `total`；筛选在后端完成，
+   因此空态可以确定地写"这个空间没有「fact」维度的记忆"，而不是"已加载的 100 条里没有"。
+3. **时间**：统一 `new Date(ts.replace(' ', 'T') + 'Z')` 再本地化；SQLite `CURRENT_TIMESTAMP` 是 UTC 无时区。
+4. **删除记忆文案**：明确"之后的检索不再返回它；已写入对话历史的内容不会被撤回"。
+5. **队列明细**：`GET /queue`（`stats/items/total/hasMore/stuckCount/stuckAfterSeconds/maxRetries`）+
+   `GET /queue/:id`（完整 `raw_content`）。列表含 `retry_count`、`claimed_ago_seconds`、
+   `content_preview`（200 字）、`content_length`；processing 超过 `stuckAfterSeconds` 的单独标记；
+   failed 显示重试次数与 `error`。面板对队列只读，领取/归档/拒绝仍只走管理员工具。
+6. **会话标题**：本版本客户端契约（`SessionRetainInfo`/`SessionSnapshot`/`SessionSearchResultItem`）
+   没有标题字段，因此面板只显示 id 前缀 + 复制，并按"已绑定本空间 / 其它已知会话"分组，不做标题猜测。
+
+验证：单测 **172 项全绿**；live `GET /queue` 返回明细与 `stuckCount`，`GET /memories?...&dimension=fact`
+返回 `total`；面板脚本通过语法检查并在运行页面热加载（`sidebar.panellist` + `main` 均 active）。
+
 ## 复现
 
 ```powershell

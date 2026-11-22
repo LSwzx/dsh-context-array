@@ -54,33 +54,62 @@ export function updateSpace(db, { id, name, description } = {}) {
 }
 
 /**
- * Delete a space. Refuses the default space and any space that still has memories,
- * so a UI click cannot silently drop remembered facts.
+ * Delete a space. Refuses the default space and any space that still has an ACTIVE
+ * memory (the same predicate `listSpacesDetailed` counts, so the UI can disable the
+ * action with the same number it shows). Superseded rows do not block deletion; they
+ * are cleared together with the space so no orphan history survives it.
  */
 export function deleteSpace(db, id) {
   if (id === DEFAULT_SPACE_ID) return { deleted: false, reason: 'DEFAULT_SPACE' }
   const row = getSpace(db, id)
   if (!row) return { deleted: false, reason: 'NOT_FOUND' }
-  const used = db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get(id).n
-  if (used > 0) return { deleted: false, reason: 'SPACE_NOT_EMPTY', memories: used }
+  const active = countActiveMemories(db, id)
+  if (active > 0) return { deleted: false, reason: 'SPACE_NOT_EMPTY', memories: active }
+  db.prepare('DELETE FROM memories WHERE space_id = ?').run(id)
+  db.prepare('DELETE FROM inbox WHERE space_id = ?').run(id)
   db.prepare('DELETE FROM session_space_links WHERE space_id = ?').run(id)
   db.prepare('DELETE FROM memory_spaces WHERE id = ?').run(id)
   return { deleted: true }
 }
 
-/** Memories in one space, newest first. */
-export function listMemories(db, { spaceId, limit = 50, includeSuperseded = false } = {}) {
-  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200)
-  const filter = includeSuperseded ? '' : 'AND superseded_by IS NULL'
+/** Active (not superseded) memory count for one space, optionally one dimension. */
+export function countActiveMemories(db, spaceId, dimension) {
+  const row = dimension
+    ? db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM memories WHERE space_id = ? AND dimension = ? AND superseded_by IS NULL',
+        )
+        .get(spaceId, dimension)
+    : db
+        .prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ? AND superseded_by IS NULL')
+        .get(spaceId)
+  return Number(row?.n ?? 0) || 0
+}
+
+/**
+ * Memories in one space, newest first.
+ *
+ * @param {{ spaceId: string, dimension?: string, limit?: number, offset?: number, includeSuperseded?: boolean }} input
+ */
+export function listMemories(db, { spaceId, dimension, limit = 100, offset = 0, includeSuperseded = false } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 200)
+  const safeOffset = Math.max(Number(offset) || 0, 0)
+  const conditions = ['space_id = ?']
+  const params = [spaceId]
+  if (!includeSuperseded) conditions.push('superseded_by IS NULL')
+  if (dimension) {
+    conditions.push('dimension = ?')
+    params.push(dimension)
+  }
   return db
     .prepare(
       `SELECT id, space_id, dimension, content, timestamp, superseded_by, source_session_id
          FROM memories
-        WHERE space_id = ? ${filter}
+        WHERE ${conditions.join(' AND ')}
         ORDER BY seq DESC
-        LIMIT ?`,
+        LIMIT ? OFFSET ?`,
     )
-    .all(spaceId, safeLimit)
+    .all(...params, safeLimit, safeOffset)
 }
 
 /** Delete one memory (hard delete; the store is local and user-controlled). */

@@ -13,9 +13,10 @@ import {
   listInbox,
   sendInbox,
 } from './inbox.js'
-import { queueStats } from './queue.js'
+import { getQueueItem, listQueueItems, queueStats, QUEUE_STATUSES } from './queue.js'
 import {
   bindSessionToSpace,
+  countActiveMemories,
   createSpace,
   deleteMemory,
   deleteSpace,
@@ -26,6 +27,9 @@ import {
   unbindSessionFromSpace,
   updateSpace,
 } from './spaces.js'
+
+/** The five allowed dimensions; also the only accepted `dimension` filter values. */
+const MEMORY_DIMENSIONS = ['working', 'recent', 'fact', 'reflection', 'personality']
 
 export const API_PREFIX = '/api/context-array'
 
@@ -111,8 +115,21 @@ export function registerContextArrayApi({ ctx, db, config, warn }) {
         }
         if (method === 'GET' && path === '/memories') {
           const spaceId = url.searchParams.get('spaceId') ?? ''
-          const limit = Number(url.searchParams.get('limit') ?? 50)
-          return json(res, 200, { memories: spaceId === '' ? [] : listMemories(db, { spaceId, limit }) })
+          if (spaceId === '') return json(res, 400, { error: 'SPACE_ID_REQUIRED', memories: [], total: 0 })
+          const dimension = url.searchParams.get('dimension') || undefined
+          if (dimension !== undefined && !MEMORY_DIMENSIONS.includes(dimension)) {
+            return json(res, 400, { error: 'INVALID_DIMENSION', memories: [], total: 0 })
+          }
+          const limit = Number(url.searchParams.get('limit') ?? 100)
+          const offset = Number(url.searchParams.get('offset') ?? 0)
+          const memories = listMemories(db, { spaceId, dimension, limit, offset })
+          return json(res, 200, {
+            memories,
+            total: countActiveMemories(db, spaceId, dimension),
+            limit: Math.min(Math.max(Number(limit) || 100, 1), 200),
+            offset: Math.max(Number(offset) || 0, 0),
+            dimension: dimension ?? null,
+          })
         }
         if (method === 'POST' && path === '/memories/delete') {
           const deleted = deleteMemory(db, String(body.id ?? ''))
@@ -132,7 +149,31 @@ export function registerContextArrayApi({ ctx, db, config, warn }) {
           return json(res, result.unbound ? 200 : 404, result.unbound ? result : { ...result, error: 'BINDING_NOT_FOUND' })
         }
         if (method === 'GET' && path === '/queue') {
-          return json(res, 200, queueStats(db))
+          const status = url.searchParams.get('status') || undefined
+          if (status !== undefined && status !== '' && !QUEUE_STATUSES.includes(status)) {
+            return json(res, 400, { error: 'INVALID_STATUS', stats: queueStats(db), items: [] })
+          }
+          const sourceSessionId = url.searchParams.get('sourceSessionId') || undefined
+          const limit = Number(url.searchParams.get('limit') ?? 50)
+          const offset = Number(url.searchParams.get('offset') ?? 0)
+          const listing = listQueueItems(db, {
+            status: status || undefined,
+            sourceSessionId,
+            limit,
+            offset,
+            staleMinutes: config.queueStaleMinutes,
+            maxRetries: config.queueMaxRetries,
+          })
+          return json(res, 200, {
+            stats: queueStats(db),
+            ...listing,
+            limit: Math.min(Math.max(Number(limit) || 50, 1), 200),
+            offset: Math.max(Number(offset) || 0, 0),
+          })
+        }
+        if (method === 'GET' && path.startsWith('/queue/')) {
+          const item = getQueueItem(db, decodeURIComponent(path.slice('/queue/'.length)))
+          return item === null ? json(res, 404, { error: 'QUEUE_ITEM_NOT_FOUND' }) : json(res, 200, { item })
         }
         if (method === 'GET' && path === '/inbox') {
           const targetSessionId = url.searchParams.get('targetSessionId') ?? undefined

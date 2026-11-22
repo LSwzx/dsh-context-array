@@ -122,3 +122,75 @@ export function queueStats(db) {
   stats.total = Object.values(stats).reduce((sum, value) => sum + value, 0)
   return stats
 }
+
+/** Columns shared by the list and the single-item read, plus derived age. */
+const QUEUE_ITEM_COLUMNS = `
+  id, status, retry_count, created_at, claimed_at, error, source_session_id,
+  substr(raw_content, 1, 200) AS content_preview,
+  length(raw_content) AS content_length,
+  CASE WHEN claimed_at IS NULL THEN NULL
+       ELSE CAST((julianday('now') - julianday(claimed_at)) * 86400 AS INTEGER) END AS claimed_ago_seconds`
+
+/**
+ * Read-only queue listing for the UI (M4 follow-up).
+ *
+ * The panel never writes here: claiming, archiving and settling stay in the admin
+ * tools, the single write path.
+ *
+ * @param {any} db
+ * @param {{ status?: string, sourceSessionId?: string, limit?: number, offset?: number,
+ *           staleMinutes?: number, maxRetries?: number }} [options]
+ * @returns {{ items: object[], total: number, hasMore: boolean, stuckCount: number,
+ *             stuckAfterSeconds: number, maxRetries: number }}
+ */
+export function listQueueItems(db, { status, sourceSessionId, limit = 50, offset = 0, staleMinutes = 10, maxRetries = 3 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200)
+  const safeOffset = Math.max(Number(offset) || 0, 0)
+  const conditions = []
+  const params = []
+  if (status && QUEUE_STATUSES.includes(status)) {
+    conditions.push('status = ?')
+    params.push(status)
+  }
+  if (sourceSessionId) {
+    conditions.push('source_session_id = ?')
+    params.push(sourceSessionId)
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const items = db
+    .prepare(
+      `SELECT ${QUEUE_ITEM_COLUMNS} FROM memory_queue ${where}
+        ORDER BY created_at ASC, rowid ASC
+        LIMIT ? OFFSET ?`,
+    )
+    .all(...params, safeLimit, safeOffset)
+  const total = Number(db.prepare(`SELECT COUNT(*) AS n FROM memory_queue ${where}`).get(...params)?.n ?? 0)
+  const stuckAfterSeconds = staleMinutes * 60
+  const stuckCount = Number(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM memory_queue
+          WHERE status = 'processing' AND claimed_at IS NOT NULL
+            AND claimed_at <= datetime('now', ?)`,
+      )
+      .get(`-${staleMinutes} minutes`)?.n ?? 0,
+  )
+  return {
+    items,
+    total,
+    hasMore: safeOffset + items.length < total,
+    stuckCount,
+    stuckAfterSeconds,
+    maxRetries,
+  }
+}
+
+/** One queue item with the full raw content, or null. */
+export function getQueueItem(db, id) {
+  const row = db
+    .prepare(
+      `SELECT ${QUEUE_ITEM_COLUMNS}, raw_content FROM memory_queue WHERE id = ?`,
+    )
+    .get(id)
+  return row ?? null
+}

@@ -262,3 +262,80 @@ test('a duplicate inbox send reports duplicate instead of delivering twice', asy
   assert.equal(second.json.delivery.mode, 'duplicate')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1)
 })
+
+test('memories support dimension filtering, paging and a total', async (t) => {
+  const { route, db } = fixture(t)
+  const insert = (id, dimension) =>
+    db
+      .prepare('INSERT INTO memories (id, space_id, dimension, content, source_session_id) VALUES (?, ?, ?, ?, ?)')
+      .run(id, 'space-default', dimension, id, 's1')
+  insert('m-fact-1', 'fact')
+  insert('m-fact-2', 'fact')
+  insert('m-reflection', 'reflection')
+
+  const all = await request(route, { path: '/api/context-array/memories?spaceId=space-default' })
+  assert.equal(all.json.total, 3)
+  assert.equal(all.json.memories.length, 3)
+  assert.equal(all.json.dimension, null)
+
+  const facts = await request(route, {
+    path: '/api/context-array/memories?spaceId=space-default&dimension=fact&limit=1&offset=1',
+  })
+  assert.equal(facts.json.total, 2)
+  assert.equal(facts.json.memories.length, 1)
+  assert.equal(facts.json.dimension, 'fact')
+  assert.equal(facts.json.limit, 1)
+  assert.equal(facts.json.offset, 1)
+
+  const missingSpace = await request(route, { path: '/api/context-array/memories' })
+  assert.equal(missingSpace.status, 400)
+  assert.equal(missingSpace.json.error, 'SPACE_ID_REQUIRED')
+
+  const badDimension = await request(route, { path: '/api/context-array/memories?spaceId=space-default&dimension=nope' })
+  assert.equal(badDimension.status, 400)
+  assert.equal(badDimension.json.error, 'INVALID_DIMENSION')
+})
+
+test('the queue endpoint lists items, flags stuck claims, and serves full content', async (t) => {
+  const { route, db } = fixture(t)
+  const insert = (id, status, retryCount, claimedAt) =>
+    db
+      .prepare('INSERT INTO memory_queue (id, source_session_id, raw_content, status, retry_count, claimed_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, 's1', 'x'.repeat(300), status, retryCount, claimedAt)
+  insert('q-pending', 'pending', 0, null)
+  insert('q-stuck', 'processing', 1, '2020-01-01 00:00:00')
+  insert('q-failed', 'failed', 3, null)
+  db.prepare('UPDATE memory_queue SET error = ? WHERE id = ?').run('SUPERSEDE_FAILED: nope', 'q-failed')
+
+  const listing = await request(route, { path: '/api/context-array/queue' })
+  assert.equal(listing.status, 200)
+  assert.equal(listing.json.stats.total, 3)
+  assert.equal(listing.json.items.length, 3)
+  assert.equal(listing.json.stuckCount, 1)
+  assert.equal(listing.json.stuckAfterSeconds, 600)
+  assert.equal(listing.json.maxRetries, 3)
+  assert.equal(listing.json.hasMore, false)
+
+  const stuckItem = listing.json.items.find((item) => item.id === 'q-stuck')
+  assert.equal(stuckItem.content_preview.length, 200)
+  assert.equal(stuckItem.content_length, 300)
+  assert.equal(stuckItem.claimed_ago_seconds > 600, true)
+
+  const failedOnly = await request(route, { path: '/api/context-array/queue?status=failed' })
+  assert.deepEqual(
+    failedOnly.json.items.map((item) => item.id),
+    ['q-failed'],
+  )
+  assert.match(failedOnly.json.items[0].error, /SUPERSEDE_FAILED/)
+
+  const detail = await request(route, { path: '/api/context-array/queue/q-pending' })
+  assert.equal(detail.status, 200)
+  assert.equal(detail.json.item.raw_content.length, 300)
+  const missing = await request(route, { path: '/api/context-array/queue/nope' })
+  assert.equal(missing.status, 404)
+  assert.equal(missing.json.error, 'QUEUE_ITEM_NOT_FOUND')
+
+  const badStatus = await request(route, { path: '/api/context-array/queue?status=weird' })
+  assert.equal(badStatus.status, 400)
+  assert.equal(badStatus.json.error, 'INVALID_STATUS')
+})

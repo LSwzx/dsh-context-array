@@ -11,6 +11,7 @@ import { resolveConfig } from '../src/config.js'
 import { bindSessionSpaces, ensureDefaultSpace, openStore } from '../src/db.js'
 import {
   bindSessionToSpace,
+  countActiveMemories,
   createSpace,
   deleteMemory,
   deleteSpace,
@@ -63,10 +64,64 @@ test('delete refuses the default space and non-empty spaces', (t) => {
   const refused = deleteSpace(db, space.id)
   assert.equal(refused.deleted, false)
   assert.equal(refused.reason, 'SPACE_NOT_EMPTY')
+  assert.equal(refused.memories, 1)
 
   deleteMemory(db, 'm1')
   assert.deepEqual(deleteSpace(db, space.id), { deleted: true })
   assert.equal(getSpace(db, space.id), null)
+})
+
+test('deletion counts only active memories but clears superseded rows and inbox rows', (t) => {
+  const db = fixture(t)
+  const space = createSpace(db, { name: 'Legacy' })
+  const insert = (id, supersededBy) =>
+    db
+      .prepare('INSERT INTO memories (id, space_id, dimension, content, source_session_id, superseded_by) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, space.id, 'fact', id, 's1', supersededBy)
+  insert('old', 'new')
+  insert('new', null)
+  db.prepare("INSERT INTO inbox (id, space_id, source_session_id, target_session_id, content) VALUES (?, ?, ?, ?, ?)").run(
+    'inbox-1',
+    space.id,
+    's1',
+    's2',
+    'hi',
+  )
+
+  // Active memory blocks deletion with the same count the list shows.
+  const blocked = deleteSpace(db, space.id)
+  assert.equal(blocked.deleted, false)
+  assert.equal(blocked.memories, 1)
+  assert.equal(countActiveMemories(db, space.id), 1)
+
+  // Remove the active one: only the superseded row is left, which must not block.
+  db.prepare('DELETE FROM memories WHERE id = ?').run('new')
+  assert.deepEqual(deleteSpace(db, space.id), { deleted: true })
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories WHERE space_id = ?').get(space.id).n, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox WHERE space_id = ?').get(space.id).n, 0)
+})
+
+test('listMemories filters by dimension, paginates, and countActiveMemories agrees', (t) => {
+  const db = fixture(t)
+  const space = createSpace(db, { name: 'Filter' })
+  const insert = (id, dimension) =>
+    db
+      .prepare('INSERT INTO memories (id, space_id, dimension, content, source_session_id) VALUES (?, ?, ?, ?, ?)')
+      .run(id, space.id, dimension, id, 's1')
+  insert('a', 'fact')
+  insert('b', 'fact')
+  insert('c', 'reflection')
+
+  assert.equal(countActiveMemories(db, space.id), 3)
+  assert.equal(countActiveMemories(db, space.id, 'fact'), 2)
+  assert.deepEqual(
+    listMemories(db, { spaceId: space.id, dimension: 'fact' }).map((row) => row.id),
+    ['b', 'a'],
+  )
+  assert.deepEqual(
+    listMemories(db, { spaceId: space.id, dimension: 'fact', limit: 1, offset: 1 }).map((row) => row.id),
+    ['a'],
+  )
 })
 
 test('bindings upsert, list and unbind', (t) => {

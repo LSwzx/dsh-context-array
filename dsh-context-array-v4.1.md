@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.3.0)
+# dsh-context-array 产品需求与技术架构文档 (v4.3.1)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -473,6 +473,24 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.3.0 → v4.3.1（M4 UI 修正 + 队列页，2026-11-22）**
+
+- **空间删除口径对齐**：`deleteSpace` 改为只按"有效记忆"（`superseded_by IS NULL`）判定非空，并把该空间
+  全部记忆行（含已取代）与 `inbox` 行一起清除，避免孤儿；UI 的禁用条件与列表计数同口径。后端未更新前
+  UI 保留兜底提示："含已取代的旧记忆共 N 条，面板暂时无法清理"。
+- **记忆接口**：`GET /memories` 增加 `dimension`、`limit`、`offset`，返回 `total`（同筛选条件下的有效条数）；
+  `listMemories` 支持维度筛选与分页；`countActiveMemories` 与列表口径一致。
+- **队列明细接口**：新增 `listQueueItems` / `getQueueItem` 与 `GET /queue`（`stats` + `items` + `total` +
+  `hasMore` + `stuckCount` + `stuckAfterSeconds` + `maxRetries`）与 `GET /queue/:id`（完整 `raw_content`）。
+  列表字段：`id/status/retry_count/created_at/claimed_at/claimed_ago_seconds/error/source_session_id/
+  content_preview(200 字)/content_length`。面板对队列**只读**，领取/归档/拒绝仍只走管理员工具。
+- **UI 修正**：空间页加"编辑名称/规则"（两层提示：只影响新会话；新会话 L4 不同 → 不共享旧前缀，需重建一次）；
+  会话绑定分"已绑定到本空间"与"其它已知会话"两组（客户端契约无会话标题，不混排）；空间 id / 会话 id 复制；
+  记忆页维度单选筛选（后端筛选）+ 只显示有效记忆 + 内容纯文本 + 详情含来源会话/时间/所属空间 + 跳回空间；
+  删除记忆文案改为"之后的检索不再返回它；已写入对话历史的内容不会被撤回"；绑定表单补"绑定后该会话可检索
+  本空间，但其 L4 规则不会变化"；时间统一按 `replace(' ','T')+'Z'` 解析后转本地。
+- 单测 172 项全绿（新增空间删除口径、维度筛选/分页、队列明细/超时/详情用例）。
 
 **v4.2.2 → v4.3.0（M4 留言箱 + 多空间 + 侧边栏 UI，2026-11-22）**
 

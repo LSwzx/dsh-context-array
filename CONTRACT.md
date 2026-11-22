@@ -264,6 +264,11 @@ export function claimNext(db, { staleMinutes = 10, maxRetries = 3 })
 // -> claimed row (retry_count already incremented) or null
 export function settleClaim(db, id, status, { error })   // done|rejected|failed, processing only
 export function queueStats(db)                            // per-status counts + total
+export function listQueueItems(db, { status, sourceSessionId, limit, offset, staleMinutes, maxRetries })
+// -> { items, total, hasMore, stuckCount, stuckAfterSeconds, maxRetries }
+// items carry: id, status, retry_count, created_at, claimed_at, error, source_session_id,
+//              content_preview (200 chars), content_length, claimed_ago_seconds
+export function getQueueItem(db, id)                      // one row + full raw_content, or null
 ```
 
 ## `src/memory-tools.js` (M3)
@@ -289,8 +294,10 @@ export function getSpace(db, id)
 export function listSpacesDetailed(db)          // + memories / sessions counts
 export function createSpace(db, { name, description })      // id = space-<8 hex>
 export function updateSpace(db, { id, name, description })
-export function deleteSpace(db, id)             // refuses DEFAULT_SPACE and non-empty spaces
-export function listMemories(db, { spaceId, limit, includeSuperseded })
+export function deleteSpace(db, id)             // refuses DEFAULT_SPACE and spaces with ACTIVE memories;
+                                                // otherwise clears memories (incl. superseded), inbox and links
+export function countActiveMemories(db, spaceId, dimension?)
+export function listMemories(db, { spaceId, dimension, limit, offset, includeSuperseded })
 export function deleteMemory(db, id)
 export function listBindings(db)                // [{ session_id, space_id, role, space_name }]
 export function listKnownSessions(db)           // [{ sessionId, links: [{spaceId, role}] }]
@@ -320,9 +327,13 @@ export const API_PREFIX = '/api/context-array'
 export function registerContextArrayApi({ ctx, db, config, warn })  // -> disposer (noop without webServer)
 ```
 Routes: `GET /health`, `GET /overview`, `POST /spaces/create|/spaces/update|/spaces/delete`,
-`GET /memories?spaceId=&limit=`, `POST /memories/delete`, `POST /bind|/unbind`,
-`GET /queue`, `GET /inbox?targetSessionId=&status=`, `POST /inbox/send|/inbox/ack`.
-Reads are loopback-only; writes additionally require the `x-context-array-ui: 1` header.
+`GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
+`POST /memories/delete`, `POST /bind|/unbind`,
+`GET /queue?status=&sourceSessionId=&limit=&offset=` (returns `{ stats, items, total, hasMore, stuckCount,
+stuckAfterSeconds, maxRetries }`), `GET /queue/:id` (full `raw_content`),
+`GET /inbox?targetSessionId=&status=`, `POST /inbox/send|/inbox/ack`.
+Reads are loopback-only; writes additionally require the `x-context-array-ui: 1` header. The queue
+endpoints are read-only by design: claiming/archiving/settling stay in the admin tools.
 
 ## `client.js` (M4)
 
