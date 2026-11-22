@@ -275,6 +275,21 @@ window.__ModuleLoader__.load({
       }
 
       const common = { note, act, busy, copy, overview, activeSpaceId, setActiveSpaceId, setTab };
+      const [guideOpen, setGuideOpen] = React.useState(() => {
+        try {
+          return localStorage.getItem('context-array-guide') !== '1';
+        } catch {
+          return true;
+        }
+      });
+      function dismissGuide() {
+        setGuideOpen(false);
+        try {
+          localStorage.setItem('context-array-guide', '1');
+        } catch {
+          /* storage unavailable: the guide simply reappears next open */
+        }
+      }
 
       return h(
         'div',
@@ -297,6 +312,17 @@ window.__ModuleLoader__.load({
           ),
           h('span', { className: 'ca-status is-' + status.kind, role: 'status', 'aria-live': 'polite' }, status.text),
         ),
+        guideOpen
+          ? h(
+              'div',
+              { className: 'ca-card', style: { margin: '10px 14px 0' } },
+              h('div', { className: 'ca-card-head' }, h('span', { className: 'ca-name' }, '新手引导'), h('button', { className: 'ca-btn', onClick: dismissGuide }, '知道了')),
+              h('div', { className: 'ca-hint' }, '① 插件不会自动把任何会话绑定到空间：未绑定的会话默认使用「默认空间」，检索与提示词都照常工作。'),
+              h('div', { className: 'ca-hint' }, '② 需要按项目隔离时：在「空间」页新建空间，再把会话绑定到它（或在对话里用 memory_bind）。'),
+              h('div', { className: 'ca-hint' }, '③ 「记忆」页按空间与维度查看有效记忆，只支持删除单条；已被取代的旧记忆不显示。'),
+              h('div', { className: 'ca-hint' }, '④ 「队列」只读，由记忆管理员在对话里领取/归档/拒绝；「留言箱」可发留言，勾选唤醒会开启对方一轮并有每小时限流。'),
+            )
+          : null,
         tab === 'spaces'
           ? h(SpacesTab, common)
           : tab === 'memories'
@@ -1008,10 +1034,11 @@ window.__ModuleLoader__.load({
       const [inboxContent, setInboxContent] = React.useState('');
       const [inboxWake, setInboxWake] = React.useState(false);
       const [loadError, setLoadError] = React.useState('');
+      const [status, setStatus] = React.useState('pending');
 
       async function loadInbox() {
         try {
-          const data = await call('/inbox?status=pending');
+          const data = await call('/inbox?status=' + status);
           setInbox(data.messages || []);
           setLoadError('');
         } catch (error) {
@@ -1021,7 +1048,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         loadInbox();
-      }, []);
+      }, [status]);
 
       return h(
         React.Fragment,
@@ -1029,8 +1056,15 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'ca-toolbar' },
+          h(
+            'div',
+            { className: 'ca-row' },
+            [['pending', '待读'], ['read', '已读'], ['failed', '失败'], ['all', '全部']].map(([key, label]) =>
+              h('button', { key, className: 'ca-chip', 'aria-pressed': status === key, onClick: () => setStatus(key) }, label),
+            ),
+          ),
           h('button', { className: 'ca-btn', disabled: busy, onClick: loadInbox }, '刷新'),
-          h('span', { className: 'ca-muted' }, '全部待读留言（所有会话）· ' + inbox.length + ' 条'),
+          h('span', { className: 'ca-muted' }, '全部会话 · ' + inbox.length + ' 条'),
         ),
         loadError ? h('div', { className: 'ca-split' }, h('div', { className: 'ca-error' }, h('span', null, loadError), h('button', { className: 'ca-btn', onClick: loadInbox }, '重试'))) : null,
         h(
@@ -1053,7 +1087,7 @@ window.__ModuleLoader__.load({
                         'button',
                         {
                           className: 'ca-btn',
-                          disabled: busy,
+                          disabled: busy || row.status !== 'pending',
                           onClick: () =>
                             act('标记已读', async () => {
                               await call('/inbox/ack', { method: 'POST', body: { id: row.id } });
@@ -1061,8 +1095,15 @@ window.__ModuleLoader__.load({
                               return '已标记';
                             }),
                         },
-                        '已读',
+                        row.status === 'pending' ? '已读' : STATUS_META[row.status]?.label || row.status,
                       ),
+                    ),
+                    h(
+                      'div',
+                      { className: 'ca-row' },
+                      h('span', { className: 'ca-badge is-neutral' }, row.space_name || row.space_id),
+                      h('span', { className: 'ca-badge' }, '跳数 ' + (row.hop_count ?? 0) + '/3'),
+                      row.last_wake_throttled === 1 ? h('span', { className: 'ca-badge is-warn' }, '唤醒被限流') : null,
                     ),
                     h('div', { className: 'ca-content' }, row.content),
                   ),

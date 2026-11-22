@@ -14,7 +14,6 @@
 import { resolveConfig } from './src/config.js'
 import fs from 'node:fs'
 import {
-  bindSessionSpaces,
   ensureDefaultSpace,
   getOrCreateL4Snapshot,
   markBootstrapped,
@@ -118,7 +117,9 @@ export function apply(ctx, rawConfig = {}) {
     embedQuery: embedder ? (text) => embedder.embedQuery(text) : null,
   })
   try {
-    ctx.tools.register(createMemorySearchTool({ db: store.db, retriever, warn: warn('memory-tool') }))
+    ctx.tools.register(
+      createMemorySearchTool({ db: store.db, retriever, warn: warn('memory-tool'), defaultSpaceId: config.spaceId }),
+    )
   } catch (error) {
     warn('memory-tool')(error)
   }
@@ -225,7 +226,20 @@ export function apply(ctx, rawConfig = {}) {
   function bootstrapAgent(agent, source) {
     if (!agent?.id || !agent.ctx?.systemPrompt) return
     try {
-      const spaces = bindSessionSpaces(store.db, agent.id, [config.spaceId], 'main')
+      // No implicit write: an unbound session simply reads the default space. The
+      // plugin must not create a binding row for every session it sees.
+      const bound = store.db
+        .prepare(
+          `SELECT s.id, s.name, s.description, l.role
+             FROM session_space_links AS l
+             JOIN memory_spaces AS s ON s.id = l.space_id
+            WHERE l.session_id = ?
+            ORDER BY l.space_id ASC`,
+        )
+        .all(agent.id)
+      const spaces = bound.length
+        ? bound
+        : [{ id: config.spaceId, name: config.spaceName, description: config.spaceRules, role: 'main', implicit: true }]
       const snapshot = getOrCreateL4Snapshot(store.db, { sessionId: agent.id, spaces, render: renderL4 })
 
       if (!agentSections.has(agent.id)) {

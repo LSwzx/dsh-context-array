@@ -56,7 +56,7 @@ export function listInbox(db, { targetSessionId, status = 'pending', limit = 50 
     conditions.push('i.target_session_id = ?')
     params.push(targetSessionId)
   }
-  if (status) {
+  if (status && status !== 'all') {
     conditions.push('i.status = ?')
     params.push(status)
   }
@@ -64,7 +64,9 @@ export function listInbox(db, { targetSessionId, status = 'pending', limit = 50 
   return db
     .prepare(
       `SELECT i.id, i.space_id, s.name AS space_name, i.source_session_id, i.target_session_id,
-              i.content, i.status, i.created_at
+              i.content, i.status, i.hop_count, i.created_at,
+              (SELECT w.throttled FROM inbox_wake_log AS w
+                WHERE w.inbox_id = i.id ORDER BY w.at DESC, w.id DESC LIMIT 1) AS last_wake_throttled
          FROM inbox AS i
          LEFT JOIN memory_spaces AS s ON s.id = i.space_id
          ${where}

@@ -178,6 +178,9 @@ export function registerContextArrayApi({ ctx, db, config, warn }) {
         if (method === 'GET' && path === '/inbox') {
           const targetSessionId = url.searchParams.get('targetSessionId') ?? undefined
           const status = url.searchParams.get('status') || 'pending'
+          if (!['pending', 'read', 'failed', 'all'].includes(status)) {
+            return json(res, 400, { error: 'INVALID_STATUS', messages: [] })
+          }
           return json(res, 200, { messages: listInbox(db, { targetSessionId, status }) })
         }
         if (method === 'POST' && path === '/inbox/send') {

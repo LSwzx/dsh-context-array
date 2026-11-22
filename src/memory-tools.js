@@ -103,7 +103,7 @@ const INBOX_ACK_OUTPUT = {
  * @param {string} sessionId
  * @returns {{ spaceIds: string[], role: string|null }}
  */
-export function sessionBinding(db, sessionId) {
+export function sessionBinding(db, sessionId, fallbackSpaceId = '') {
   try {
     const rows = db
       .prepare(
@@ -114,12 +114,16 @@ export function sessionBinding(db, sessionId) {
           ORDER BY l.space_id ASC`,
       )
       .all(sessionId)
+    if (rows.length === 0 && fallbackSpaceId) {
+      // Implicit default: sessions are usable without the plugin writing a binding.
+      return { spaceIds: [fallbackSpaceId], role: null, implicit: true }
+    }
     return {
       spaceIds: rows.map((row) => row.space_id),
       role: rows.find((row) => typeof row.role === 'string')?.role ?? null,
     }
   } catch {
-    return { spaceIds: [], role: null }
+    return { spaceIds: fallbackSpaceId ? [fallbackSpaceId] : [], role: null }
   }
 }
 
@@ -143,7 +147,7 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
   function isAdmin(sessionId) {
     if (!sessionId) return false
     if (adminIds.has(sessionId)) return true
-    return sessionBinding(db, sessionId).role === 'admin'
+    return sessionBinding(db, sessionId, config.spaceId).role === 'admin'
   }
 
   function denied(reason) {
@@ -152,7 +156,7 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
 
   /** Bound-spaces lookup reused by bind/unbind/inbox. */
   function spacesOf(sessionId) {
-    return sessionBinding(db, sessionId).spaceIds
+    return sessionBinding(db, sessionId, config.spaceId).spaceIds
   }
 
   return [
@@ -287,7 +291,7 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         const content = String(args?.content ?? '').trim()
         const dimension = String(args?.dimension ?? '')
         const spaceId = String(args?.spaceId ?? '')
-        const allowed = sessionBinding(db, sessionId).spaceIds
+        const allowed = sessionBinding(db, sessionId, config.spaceId).spaceIds
         if (content.length === 0) return { memoryId: '', embedded: false, error: 'EMPTY_CONTENT' }
         if (!allowed.includes(spaceId)) return { memoryId: '', embedded: false, error: 'SPACE_NOT_BOUND' }
 

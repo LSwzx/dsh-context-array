@@ -115,3 +115,19 @@ test('throttled wakes do not count against the hourly budget', (t) => {
   assert.equal(wakeCountLastHour(db, 's2'), 1)
   assert.equal(deliverInbox(ctx, { db, targetSessionId: 's2', content: 'ok', wake: true }).mode, 'woke')
 })
+
+test('listInbox exposes hop_count and the throttled wake marker', (t) => {
+  const db = fixture(t)
+  const row = sendInbox(db, { spaceId: 'space-default', sourceSessionId: 's1', targetSessionId: 's2', content: 'hop' })
+  db.prepare('UPDATE inbox SET hop_count = 2 WHERE id = ?').run(row.id)
+  noteWake(db, { targetSessionId: 's2', sourceSessionId: 's1', inboxId: row.id, throttled: true })
+
+  const [pending] = listInbox(db, { targetSessionId: 's2' })
+  assert.equal(pending.hop_count, 2)
+  assert.equal(pending.last_wake_throttled, 1)
+  assert.equal(pending.space_name, 'Default space')
+
+  assert.equal(listInbox(db, { status: 'all' }).length, 1, 'status=all must not filter')
+  assert.equal(listInbox(db, { status: 'read' }).length, 0)
+})
+

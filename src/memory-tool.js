@@ -45,9 +45,9 @@ const OUTPUT_SCHEMA = {
  * @param {string} sessionId
  * @returns {string[]} bound space ids, ordered
  */
-function boundSpaceIds(db, sessionId) {
+function boundSpaceIds(db, sessionId, fallbackSpaceId) {
   try {
-    return db
+    const ids = db
       .prepare(
         `SELECT l.space_id
            FROM session_space_links AS l
@@ -57,8 +57,12 @@ function boundSpaceIds(db, sessionId) {
       )
       .all(sessionId)
       .map((row) => row.space_id)
+    // No explicit binding: the default space is used implicitly, so installing the
+    // plugin does not write a binding row for every session.
+    if (ids.length === 0 && fallbackSpaceId) return [fallbackSpaceId]
+    return ids
   } catch {
-    return []
+    return fallbackSpaceId ? [fallbackSpaceId] : []
   }
 }
 
@@ -68,7 +72,7 @@ function boundSpaceIds(db, sessionId) {
  * @param {{ db: any, retriever: { search: Function }, warn?: (error: unknown) => void }} input
  * @returns {object} ToolDefinition
  */
-export function createMemorySearchTool({ db, retriever, warn = () => {} }) {
+export function createMemorySearchTool({ db, retriever, warn = () => {}, defaultSpaceId = '' }) {
   return {
     name: 'memory_search',
     description:
@@ -118,7 +122,7 @@ export function createMemorySearchTool({ db, retriever, warn = () => {} }) {
       if (!sessionId) {
         return { query, items: [], diagnostics: { error: 'NO_SESSION_IDENTITY' } }
       }
-      const spaceIds = boundSpaceIds(db, sessionId)
+      const spaceIds = boundSpaceIds(db, sessionId, defaultSpaceId)
       if (spaceIds.length === 0) {
         return { query, items: [], diagnostics: { error: 'NO_BOUND_SPACES' } }
       }
