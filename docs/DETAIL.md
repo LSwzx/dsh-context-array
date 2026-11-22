@@ -80,7 +80,30 @@ share and only a cost reference. `systemMessageCount` / `systemDigestAll` expose
 a prompt DSH appended in history (`systemPromptUpdate: 'in-history'`).
 
 A second log, `events.jsonl`, records `compaction/provider-installed`,
-`compaction/pressure`, `history/replace` and `compaction/provider-conflict`.
+`compaction/pressure`, `compaction/alarm`, `compaction/provider-conflict` and
+`history/replace`.
+
+## 5. Local retrieval (`memory_search`)
+
+M2 adds a local embedding model and a hybrid retriever:
+
+- **Model**: `Xenova/multilingual-e5-small` (384 dims, q8 ONNX, about 129 MiB), downloaded
+  once with `node tools/fetch-model.mjs` into `<dataDir>/models`. It runs in a worker thread:
+  first load takes about 1.6–1.8 s, one embedding about 12.5 ms, and a queue of 60 requests
+  moves the main thread's 50 ms timer by 3 ms median — the Host stays responsive.
+- **Retrieval**: vector top-20 (dot product over L2-normalised vectors) plus FTS5 `trigram`
+  top-20 (short queries fall back to `LIKE`), fused with RRF at **2:1** vector/keyword weights,
+  truncated to a token budget, rendered as a `<memory>` block. If the embedder is unavailable
+  the keyword path still answers.
+- **Tool**: `memory_search(query, limit?)`. The calling session comes from the host-injected
+  execution context, and bound spaces are read from `session_space_links`; the model cannot
+  name another session or space. Memory text is data, never instructions.
+
+Measured on 40 memories / 15 queries: vector-only recall@5 1.00, MRR 0.9667; keyword-only
+0.5333 / 0.4056; hybrid 2:1 1.00 / 0.9667 at about 8 ms. Details in `docs/M2-RESULTS.md`.
+
+Automatic per-turn injection of retrieved `<memory>` blocks is **not wired yet**: it waits for
+M3, when the manager starts writing real memories. Until then the model calls the tool on demand.
 
 ### 4. Append layer
 

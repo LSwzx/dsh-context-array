@@ -37,9 +37,12 @@ import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
 import { createEventLog } from './src/events.js'
 import { installCompactionTakeover, installHistoryReplacementWatch } from './src/compaction.js'
+import { createEmbeddingClient } from './src/embedding/client.js'
+import { createRetriever } from './src/retrieval.js'
+import { createMemorySearchTool } from './src/memory-tool.js'
 
 export const name = 'dsh-context-array'
-export const inject = ['systemPrompt', 'llm']
+export const inject = ['systemPrompt', 'llm', 'tools']
 
 /** Sources that represent a fresh conversation for this session. */
 const BOOTSTRAP_SOURCES = new Set(['startup', 'clear'])
@@ -83,6 +86,24 @@ export function apply(ctx, rawConfig = {}) {
     now: () => Date.now(),
   })
   if (takeover.installed) ctx.logger?.('dsh-context-array')?.info?.('[compaction] seam claimed in observe mode')
+
+  // M2: local embedding + hybrid retrieval, exposed to the model as `memory_search`.
+  // The model loads lazily inside a worker on the first query, so activation and
+  // prompt assembly never wait for it; disabling `enableEmbedding` falls back to
+  // the keyword path only.
+  const embedder = config.enableEmbedding
+    ? createEmbeddingClient({ modelsDir: config.modelsDir, onError: warn('embedding') })
+    : null
+  if (embedder) ctx.effect(() => () => embedder.close(), 'context-array:embedding')
+  const retriever = createRetriever({
+    db: store.db,
+    embedQuery: embedder ? (text) => embedder.embedQuery(text) : null,
+  })
+  try {
+    ctx.tools.register(createMemorySearchTool({ db: store.db, retriever, warn: warn('memory-tool') }))
+  } catch (error) {
+    warn('memory-tool')(error)
+  }
 
   // L1 and L3 are global and static, so every session on this deployment shares
   // the same bytes. The L1 text is a provider (not a literal) purely so the

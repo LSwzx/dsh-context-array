@@ -206,3 +206,50 @@ test('history replacement is recorded from session events', () => {
   assert.equal(events.records[0].endSeq, 20)
   assert.equal(events.records[0].sourceEvents, 2)
 })
+
+test('an alarm is raised once when pressure crosses the alarm line', () => {
+  const events = createEvents()
+  const host = createHost({ pressureTokens: 900_000 })
+  installCompactionTakeover({
+    ctx: host.ctx,
+    config: { compactionMode: 'observe', compactionWarnTokens: 1000, compactionAlarmRatio: 0.8 },
+    events,
+  })
+  const [preStep] = host.listeners.get('agent/pre-step')
+  preStep({ agent: { id: 's1', session: {} } }, () => undefined)
+  preStep({ agent: { id: 's1', session: {} } }, () => undefined)
+  const alarms = events.records.filter((record) => record.type === 'compaction/alarm')
+  assert.equal(alarms.length, 1)
+  assert.equal(alarms[0].ratio, 0.858)
+  assert.match(alarms[0].advice, /folding is not implemented/)
+})
+
+test('no alarm below the alarm line', () => {
+  const events = createEvents()
+  const host = createHost({ pressureTokens: 500_000 })
+  installCompactionTakeover({
+    ctx: host.ctx,
+    config: { compactionMode: 'observe', compactionWarnTokens: 1000, compactionAlarmRatio: 0.8 },
+    events,
+  })
+  const [preStep] = host.listeners.get('agent/pre-step')
+  preStep({ agent: { id: 's1', session: {} } }, () => undefined)
+  assert.equal(events.records.filter((record) => record.type === 'compaction/alarm').length, 0)
+})
+
+test('the pre-step listener always delegates to next()', () => {
+  const events = createEvents()
+  const host = createHost({ pressureTokens: 500_000 })
+  installCompactionTakeover({
+    ctx: host.ctx,
+    config: { compactionMode: 'observe', compactionWarnTokens: 1 },
+    events,
+  })
+  const [preStep] = host.listeners.get('agent/pre-step')
+  let called = false
+  preStep({ agent: { id: 's1', session: {} } }, () => {
+    called = true
+    return { kind: 'enter', messages: [] }
+  })
+  assert.equal(called, true)
+})

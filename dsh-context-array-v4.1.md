@@ -1,6 +1,6 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.1.7)
+# dsh-context-array 产品需求与技术架构文档 (v4.2.0)
 
-整合 v4.0 全部需求与 v4.1 修订清单；第 0 节前置验证（v4.1.1 五项 + v4.1.4 第六项），代码与描述勘误（v4.1.2），M1 端到端实测（v4.1.3），压缩与指标口径修订（v4.1.4），M0-6 / M1-4 实测完成（v4.1.5），promptSalt 受控实验与收益测算（v4.1.6），工具集变更干净实验（v4.1.7）。状态：M1、M0-6（接管机制）、M1-4 已完成；**压缩折叠策略尚未实现，是下一个主要收益/风险点**；提示词与工具变化不打断缓存已在实测中确认。
+整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，其中折叠为已知缺口）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）均已完成并实测；M3/M4 待开工。M2 实测见 `docs/M2-RESULTS.md`，缓存收益见 `docs/CACHE-SAVINGS.md`。
 
 ## 0. 前置验证（动手前必须完成）
 
@@ -178,7 +178,9 @@
 - **不产生重复块**：同一轮只追加一份 `<memory>`；相邻轮次检索到相同记忆是可接受的重复（由 Token 预算截断兜底），不做跨轮去重，因为去重需要改写历史前缀。
 - **失效机制**：旧记忆被取代后 superseded_by 指向新记忆；检索时必须过滤掉已失效记忆。
 - **规模说明**：初期向量路暴力计算即可；记忆量大到影响延迟时再评估 sqlite-vec 等方案。
-- **运行隔离**：onnxruntime 的 CPU 推理是同步阻塞的，放在 Host 主进程里会卡死整个 DSH（所有会话、UI 与工具一起停），因此 embedding 必须跑在 `worker_threads` 或独立子进程里，插件侧只做 async RPC，模型加载同理。onnxruntime / `@xenova/transformers` 能否在 Electron 运行时内加载**尚未验证**，见 M2 的首个实验。
+- **运行隔离**：onnxruntime 的 CPU 推理是同步阻塞的，放在 Host 主进程里会卡死整个 DSH（所有会话、UI 与工具一起停），因此 embedding 必须跑在 `worker_threads` 里，插件侧只做 async RPC，模型加载同理。
+  **v4.2.0 已实测**：`@huggingface/transformers` + `onnxruntime-node` 在 Electron 44.7 / Node 24.21 下可加载；worker 首次加载 1.56–1.79 s；单条 384 维推理中位 12.5 ms；60 条排队推理时主线程 50 ms 定时器中位漂移 3.0 ms、最大 7.6 ms（不阻塞）。
+- **默认融合权重**：RRF 从 1:1 调为 **2:1（向量 2 / 关键词 1）**。40 条评测集上 1:1 的 MRR 是 0.8889，2:1 是 0.9667，recall@5 都是 1.00；关键词路主要承担精确标识符与短查询兜底。实现为 `DEFAULT_WEIGHTS`，可配置。
 - **环境要求**：trigram 分词器需要 SQLite ≥ 3.34；领取队列用到 RETURNING，需要 SQLite ≥ 3.35。已实测运行时自带的 `node:sqlite` 为 SQLite **3.53.4**（Node 24.21.0），FTS5 trigram 中文子串 `MATCH`、`RETURNING`、WAL 均可用，无需引入 better-sqlite3；注意 `DatabaseSync` 是同步 API 且没有 `db.transaction()` 包装器，事务需手写 `BEGIN IMMEDIATE / COMMIT / ROLLBACK`（实测三段均可用，事务内 `RETURNING` 也可用）。
 
 ### 3.4 跨会话通信与留言箱 (Inbox)
@@ -406,23 +408,49 @@ export class MemoryManagerDB {
    - **M1-2**：用 `llm/stream` 旁路读取 `usage.cacheReadTokens`，按 `cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` 逐请求打印命中率。（已完成，但只得到整段口径）
    - **M1-3**：在空数据、多会话状态下验证 L1–L4 前缀的稳态命中率达标。（已完成，但口径同上）
    - **M1-4（v4.1.5 已完成）**：命中率拆成 `prefixHit`（架构指标）与 `wholeHit`（成本参考），实现见 `src/prefix.js`；`prefixTokens = 系统节点 0 + 工具声明`（实测 17,957，工具占 89.8%），`prefixHitTokens = min(prefixTokens, cacheReadTokens)`。TTL 已有实测（空闲 13.5 小时后仍命中）；跨会话同账号复用仍未验证。**同时发现"前缀改写后命中不跌"的反常现象，受控实验待做（见 2 节规则 6）。**
-3. **M2 检索期**：本地向量 + FTS5 trigram 混合检索跑通。
-   - **M2-1（先做）**：embedding 可行性实验——在插件的 worker/子进程里加载 `multilingual-e5-small`，输出一条 384 维向量。要记录三件事：onnxruntime 能否在当前 Electron 运行时加载、首次加载耗时、单条 embedding 的 CPU 延迟；同时确认推理期间 Host 主进程不被阻塞（在加载/推理中打日志观察 UI 是否卡顿）。实验不通过就不进入 M2 后续。
-   - **M2-2**：混合检索（向量 + FTS5 trigram，含短查询兜底）跑通；用 30–50 条真实记忆和查询做小评测（可对比加前缀 / 不加前缀）。
+3. **M2 检索期**：（v4.2.0 已完成并实测，见 `docs/M2-RESULTS.md`）
+   - **M2-1（先做）**：embedding 可行性实验——在插件的 worker/子进程里加载 `multilingual-e5-small`，输出一条 384 维向量。
+     **实测结果**：`@huggingface/transformers@4.3.2` + `onnxruntime-node@1.30.0` 在 Electron 44.7 可加载；
+     模型 129.1 MiB / 下载 164 s；worker 首次加载 1.56–1.79 s；单条推理中位 **12.5 ms**；
+     60 条排队推理期间主线程定时器中位漂移 **3.0 ms**（不阻塞）；`|v|=1.000000`。
+   - **M2-2**：混合检索（向量 + FTS5 trigram，含短查询兜底）跑通；用 30–50 条真实记忆和查询做小评测。
+     **实测结果**（40 条记忆 / 15 查询 / 2 空间）：向量路 recall@5 1.00 / MRR 0.9667；
+     关键词路 recall@5 0.5333 / MRR 0.4056；混合 RRF **2:1（默认）** recall@5 1.00 / MRR 0.9667（中位 8.5 ms），
+     而 1:1 只有 MRR 0.8889 → **默认权重从 1:1 调为 2:1**。1000 条记忆时整条 `search()` 中位 8.5 ms。
 4. **M3 中枢期**：中央管理员提示词与异步队列跑通：领取 → 分类判断 → 本地算向量 → 入库，含取代与回滚。
 5. **M4 通信期**：留言箱（排队 + 唤醒 + 限流）+ 多空间隔离 + DSH 侧会话绑定与记忆浏览 UI。
 
 ## 7. 待定问题（尚未决定，不属于已确认设计）
 
+- **压缩折叠是否实装**（v4.2.0 决策：暂不实装，只做接管 + 压力告警）。理由：① 折叠必须调用表层替换 API，写错会破坏用户历史，风险高于当前收益；② 当前本机压力约 51%/1M 窗口，还有空间；③ 折叠参数（阈值、保留尾部、是否改用"新会话 + 摘要种子"）缺少实测依据。已实装 `compaction/alarm`：压力到窗口 80% 时写一条告警事件，提示"折叠未实现，建议开新会话"。要实装折叠时，先补一条受控实验再改。
+- **每轮自动检索并追加 `<memory>` 尚未接线**：目前只有 `memory_search` 工具（按需调用）。自动注入要等 M3 产生真实记忆后再做，否则每轮注入低价值内容反而稀释上下文。
 - **序列起点改声明块是否必然打穿缓存**（低优先残余）：需要两个前缀不同的新会话做对照；正常的运行期增删工具已实测不改变声明块。
-- **压缩接管的具体参数**：折叠阈值、保留尾部轮数、是否改走"新会话 + 摘要种子"而不是原地折叠（折叠实现尚未开始，M2 之后）。
 - `prefixHit` 的 `prefixTokens` 目前是字符启发式估算（4 字符/token），不是 provider 真值；是否引入更准的 tokenizer 待定。
 - working / recent 两个维度没有过期或衰减策略，长期运行会膨胀。
 - 记忆的删除与遗忘流程（用户主动要求忘记某条）尚未设计。
 - 管理员是常驻会话还是按需拉起，LLM 调用成本如何控制。
-- RRF 之外是否需要加权（时间新近度、维度权重）。
+- RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.1.7 → v4.2.0（M2 完成：本地 embedding + 混合检索，折叠决策，2026-11-22）**
+
+- **M2-1 通过**：`@huggingface/transformers@4.3.2` + `onnxruntime-node@1.30.0` 在 Electron 44.7 / Node 24.21
+  下加载成功（N-API v6 与 ABI 无关）；模型 `Xenova/multilingual-e5-small` q8，129.1 MiB，
+  hf-mirror 下载 164 s（sha256 校验 + 断点续传 + 幂等）；worker 首次加载 1.56–1.79 s，
+  单条 384 维推理中位 **12.5 ms**；60 条排队推理期间主线程 50 ms 定时器中位漂移 **3.0 ms**
+  （最大 7.6 ms），**不阻塞 Host**；输出 `|v| = 1.000000`，跨 Node/Electron 逐位一致。
+- **M2-2 通过**：40 条记忆 / 15 条查询 / 2 空间的评测 —— 向量路 recall@5 1.00 / MRR 0.9667；
+  关键词路 0.5333 / 0.4056；混合 RRF **1:1 只有 MRR 0.8889，2:1 恢复到 0.9667 且 recall 不变**
+  → 默认权重改为 2:1（`DEFAULT_WEIGHTS`）。1000 条记忆下整条 `search()` 中位 8.5 ms。
+- **端到端**：注册 `memory_search` 工具（身份取宿主注入的 `exec.agent.id`，空间归属查绑定表，
+  模型不能指定 session/space）；真实会话调用返回正确 top-1，`vector=true, keyword=true`。
+- **M0-6 决策：折叠暂不实装**，只保留"接管 + 压力告警"。新增 `compaction/alarm`（压力 ≥ 窗口
+  80% 时每会话告警一次，提示开新会话），并修了一个真实缺陷：`agent/pre-step` 是 waterfall，
+  监听器必须调用 `next()`，否则轮次会因 `decision` 为 `undefined` 而崩。理由与恢复条件写进 §7。
+- **依赖从零变为一个**（`@huggingface/transformers`，`node_modules` 463 MiB），
+  `CONTRIBUTING.md` 的"零依赖"表述同步更正；替代瘦身方案（onnxruntime-node + tokenizers 手写 pooling，可省 ~158 MB）未实施。
+- 新增 `docs/M2-RESULTS.md`、`tools/eval-retrieval.mjs`、`tools/seed-memories.mjs`、`tools/fetch-model.mjs`。
 
 **v4.1.6 → v4.1.7（工具集变更干净实验，2026-11-22）**
 

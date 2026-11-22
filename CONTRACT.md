@@ -176,12 +176,64 @@ export function installHistoryReplacementWatch({ ctx, events, warn })
 Takeover REQUIRES the default implementer to be absent (`dsh-compaction-basic` disabled
 by patch row); two providers in one context cannot coexist.
 
+## `src/db-memories.js` (M2)
+
+```js
+export const DIMENSIONS / MEMORY_ERRORS / DEFAULT_KEYWORD_LIMIT
+export function normalizeSpaceIds(spaceIds)          // -> string[]; junk dropped, de-duped
+export function toBlob(values)                       // Float32Array|number[] -> Buffer view
+export function fromBlob(blob)                       // Uint8Array|null -> Float32Array|null (ALWAYS copies)
+export function insertMemory(db, {id?, spaceId, dimension='fact', content, embedding=null, sourceSessionId, supersedesId=null})
+                                     // -> id; BEGIN IMMEDIATE; supersede rows!==1 -> SUPERSEDE_FAILED + rollback
+export function listActiveEmbeddings(db, spaceIds)   // -> [{id, spaceId, dimension, content, vec}]
+export function keywordSearchMode(query)             // -> 'fts' | 'like' | 'skipped'
+export function searchKeyword(db, {spaceIds, query, limit=20})  // -> [{id, spaceId, dimension, content, score}]
+export function countMemories(db)                    // -> { total, active }
+```
+
+## `src/retrieval.js` (M2)
+
+```js
+export const RRF_K / VECTOR_TOP_K / KEYWORD_TOP_K / DEFAULT_BUDGET_TOKENS / DEFAULT_RESULT_LIMIT
+export const DEFAULT_WEIGHTS                          // { vector: 2, keyword: 1 } — MRR-tuned (see docs/M2-RESULTS.md)
+export function estimateMemoryTokens(content)         // ceil(chars/4)+4
+export function renderBlock(result)                   // '<memory>…</memory>' | null; sanitises '</memory>'
+export function createRetriever({ db, embedQuery=null, budgetTokens=800, now, weights=DEFAULT_WEIGHTS })
+// -> { search({spaceIds, query, limit}), renderBlock }
+// search -> { items: [{id, spaceId, dimension, content, score, sources}], diagnostics }
+// Embedder failure degrades to keyword-only and reports it in diagnostics.error; it never throws.
+```
+
+## `src/embedding/` (M2)
+
+```js
+// client.js (main thread)
+export function createEmbeddingClient({ modelsDir, onError }) // -> { ready(), embedPassage(), embedQuery(), stats(), close() }
+// worker.js (worker_threads entry; loads the model, runs inference, L2-normalises)
+//   model path: <modelsDir>/Xenova/multilingual-e5-small
+//   prefixes:   'passage: ' / 'query: ' (e5 requirement)
+// codes: EMBEDDING_TIMEOUT | EMBEDDING_WORKER_ERROR | EMBEDDING_WORKER_EXITED | EMBEDDING_WORKER_UNSTABLE | EMBEDDING_CLOSED
+```
+
+## `src/memory-tool.js` (M2)
+
+```js
+export function createMemorySearchTool({ db, retriever, warn })
+// -> ToolDefinition for `memory_search`:
+//    parameters: { query: string, limit?: integer 1..20 }
+//    output.schema: { query, items[], diagnostics }  (diagnostics open)
+//    execute(args, exec): spaces come from exec.agent.id + session_space_links;
+//    a model can never pass session_id or space_id.
+```
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
 `compactionMode` (`off` | `observe`, defaults to `off`), `compactionWarnTokens`
-(default `300000`), `promptSaltFile` (diagnostic; defaults to `<dataDir>/prompt-salt.txt`),
-derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
+(default `300000`), `compactionAlarmRatio` (default `0.8`), `promptSaltFile` (diagnostic;
+defaults to `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`),
+`modelsDir` (default `<dataDir>/models`), derived `dbPath`, `usageLogPath`,
+`eventsLogPath`, `schemaVersion`.
 
 ## Tests
 

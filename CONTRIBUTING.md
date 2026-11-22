@@ -31,29 +31,48 @@
 
 ## 开发环境
 
-- Node.js ≥ 22.5（运行时自带 `node:sqlite`，无需 better-sqlite3）；**零 npm 依赖、无构建步骤**。
-- ESM（`"type": "module"`），只允许 `node:` 内置模块；不要 `import` `@deepseek-ai/*`
+- Node.js ≥ 22.5（运行时自带 `node:sqlite`，无需 better-sqlite3）。
+- ESM（`"type": "module"`），**无构建步骤**。
+- 依赖边界：只有本地 embedding 需要运行时依赖（`@huggingface/transformers`，M2 引入）；
+  其它模块保持零依赖，只允许 `node:` 内置模块。不要 `import` `@deepseek-ai/*`
   （profile 安装的 bundle 解析不到它们）。
+- 重型推理（onnxruntime）**必须在 worker 里**：主线程同步推理会卡死整个 Host。
 - 代码与测试全部为纯 JS + `node:test`。
 
 ```powershell
 cd dsh-context-array
+npm install                 # 仅首次 / 依赖变化时
+node tools/fetch-model.mjs  # 下载 e5-small 到 <dataDir>/models（幂等，可离线复用）
 node --test                 # 从仓库根运行；node --test test/ 在 Node 24 下会报错
+node tools/eval-retrieval.mjs
 node docs/analyze-usage.mjs # 汇总本机 usage.jsonl（只读）
 ```
+
+> **编码红线**：仓库文件全是 UTF-8。**不要**用 PowerShell 的 `Get-Content`/`Set-Content`
+> 读写含中文的仓库文件（Windows PowerShell 5.1 默认按 GBK 解释，会把 UTF-8 中文写坏，
+> 且不可逆）。用文件写工具，或 Node/Python 显式指定 `utf8`。提交前跑
+> `node "$env:TEMP\check-encoding.mjs" .`（脚本内容见 git 历史）或自查 U+FFFD。
 
 ## 目录约定
 
 | 路径 | 内容 |
 |---|---|
-| `index.js` | 插件入口：`apply(ctx, config)`，注册段、观测、追加层与生命周期清理 |
+| `index.js` | 插件入口：`apply(ctx, config)`，注册段、观测、追加层、压缩接管、检索工具与生命周期清理 |
 | `src/prompt.js` | L1/L3/L4 的纯文本与确定性渲染（字节稳定是第一要求） |
 | `src/db.js` | SQLite 建表、迁移与查询（schema 与设计文档 §4 对齐） |
+| `src/db-memories.js` | 记忆写入/取代、FTS5 检索、向量扫描的 SQL 层 |
+| `src/retrieval.js` | 混合检索：双路候选 + RRF（默认 2:1）+ token 预算 + `<memory>` 渲染 |
+| `src/embedding/` | worker 线程里的 e5-small 推理 + 主线程 async RPC 客户端 |
+| `src/memory-tool.js` | `memory_search` 工具定义（身份由宿主注入） |
 | `src/config.js` | 配置解析与默认值（非法值回退，绝不抛错） |
 | `src/observer.js` | `llm/stream` 旁路观测：usage 记录、摘要与命中率 |
+| `src/prefix.js` | 前缀 token 估算与双轨指标（`prefixHit` / `wholeHit`） |
+| `src/compaction.js` | 压缩接管（observe）、压力告警、历史替换侦测 |
 | `src/append.js` | L5 追加层：bootstrap 消息构造与投递（绝不抛进轮次） |
+| `src/events.js` | `events.jsonl` 追加日志（压缩/告警/替换） |
 | `test/` | `node --test` 用例；**只允许写 `os.tmpdir()`**，结束清理，绝不碰 `%USERPROFILE%\.dsh` |
-| `docs/` | 插件详情页、M1 实测记录、usage 分析脚本 |
+| `tools/` | 模型下载、种子记忆、检索评测（开发工具，不参与运行时） |
+| `docs/` | 插件详情页、M1/M2 实测记录、节省测算、usage 分析脚本 |
 | `CONTRACT.md` | 各模块的导出签名与记录字段契约，改接口先改它 |
 
 ## 提交前检查清单

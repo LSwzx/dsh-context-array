@@ -25,6 +25,9 @@ export const COMPACTION_MODES = Object.freeze(['off', 'observe']);
 /** Default pressure at which `observe` mode records a sample (tokens). */
 export const DEFAULT_COMPACTION_WARN_TOKENS = 400_000;
 
+/** Default share of the context window at which `observe` mode raises an alarm. */
+export const DEFAULT_COMPACTION_ALARM_RATIO = 0.8;
+
 /**
  * Return `value` when it is a non-blank string, otherwise `fallback`.
  *
@@ -83,6 +86,13 @@ export function resolveConfig(raw) {
       typeof input.promptSaltFile === 'string' && input.promptSaltFile.trim() !== ''
         ? path.resolve(input.promptSaltFile.trim())
         : path.join(dataDir, 'prompt-salt.txt'),
+    // M2: local embedding model directory and kill switch. The worker loads the
+    // model lazily on the first query, so activation never blocks on it.
+    modelsDir:
+      typeof input.modelsDir === 'string' && input.modelsDir.trim() !== ''
+        ? path.resolve(input.modelsDir.trim())
+        : path.join(dataDir, 'models'),
+    enableEmbedding: booleanOr(input.enableEmbedding, true),
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),
@@ -96,6 +106,13 @@ export function resolveConfig(raw) {
       Number.isSafeInteger(input.compactionWarnTokens) && input.compactionWarnTokens > 0
         ? input.compactionWarnTokens
         : DEFAULT_COMPACTION_WARN_TOKENS,
+    compactionAlarmRatio:
+      typeof input.compactionAlarmRatio === 'number' &&
+      Number.isFinite(input.compactionAlarmRatio) &&
+      input.compactionAlarmRatio > 0 &&
+      input.compactionAlarmRatio <= 1
+        ? input.compactionAlarmRatio
+        : DEFAULT_COMPACTION_ALARM_RATIO,
     schemaVersion: SCHEMA_VERSION,
   });
 }

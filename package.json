@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-array",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Locally hosted five-dimension memory and KV-cache-first context assembly for DeepSeek Harness.",
@@ -12,6 +12,7 @@
   "files": [
     "index.js",
     "src",
+    "tools",
     "locale/*.json",
     "docs",
     "icon.svg",
@@ -23,7 +24,12 @@
     "dsh-context-array-v4.1.md"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "fetch-model": "node tools/fetch-model.mjs",
+    "eval:retrieval": "node tools/eval-retrieval.mjs",
+    "seed": "node tools/seed-memories.mjs",
+    "usage": "node docs/analyze-usage.mjs",
+    "savings": "node docs/savings-estimate.mjs"
   },
   "engines": {
     "node": ">=22.5"
@@ -33,5 +39,8 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2"
+  }
 }

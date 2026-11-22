@@ -90,6 +90,8 @@ export function installCompactionTakeover({ ctx, config, events, warn = () => {}
   events.append({ type: 'compaction/provider-installed', mode: config.compactionMode })
 
   const lastSampleAt = new Map()
+  const alarmed = new Set()
+  const alarmRatio = config.compactionAlarmRatio ?? 0.8
 
   /** Record at most one pressure sample per session per minute; never throws. */
   function samplePressure(payload) {
@@ -98,6 +100,29 @@ export function installCompactionTakeover({ ctx, config, events, warn = () => {}
     const meter = ctx.get?.('tokenMeter')
     const pressure = meter?.contextPressure?.(agent.session)
     if (!pressure || !Number.isFinite(pressure.pressureTokens)) return
+    const window = Number.isFinite(pressure.contextWindow) ? pressure.contextWindow : null
+    const ratio = window && window > 0 ? pressure.pressureTokens / window : null
+
+    // Folding is deliberately not implemented yet, so the only honest advice at
+    // the alarm line is "start a new session before the window fills". Alarm once
+    // per crossing; re-arm when pressure drops well below the line.
+    if (ratio !== null && ratio >= alarmRatio) {
+      if (!alarmed.has(agent.id)) {
+        alarmed.add(agent.id)
+        events.append({
+          type: 'compaction/alarm',
+          sessionId: agent.id,
+          pressureTokens: pressure.pressureTokens,
+          contextWindow: window,
+          ratio: Math.round(ratio * 1000) / 1000,
+          alarmRatio,
+          advice: 'folding is not implemented; start a new session before the context window fills',
+        })
+      }
+    } else if (ratio !== null && ratio < alarmRatio * 0.9) {
+      alarmed.delete(agent.id)
+    }
+
     if (pressure.pressureTokens < config.compactionWarnTokens) return
     if (now() - (lastSampleAt.get(agent.id) ?? 0) < 60_000) return
     lastSampleAt.set(agent.id, now())
@@ -105,7 +130,8 @@ export function installCompactionTakeover({ ctx, config, events, warn = () => {}
       type: 'compaction/pressure',
       sessionId: agent.id,
       pressureTokens: pressure.pressureTokens,
-      contextWindow: Number.isFinite(pressure.contextWindow) ? pressure.contextWindow : null,
+      contextWindow: window,
+      ratio: ratio === null ? null : Math.round(ratio * 1000) / 1000,
       warnTokens: config.compactionWarnTokens,
     })
   }
