@@ -99,7 +99,9 @@ CREATE TABLE IF NOT EXISTS memory_queue (
   status TEXT CHECK(status IN ('pending', 'processing', 'done', 'rejected', 'failed')) DEFAULT 'pending',
   retry_count INT DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  claimed_at DATETIME
+  claimed_at DATETIME,
+  dedupe_key TEXT,
+  error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_l4_snapshot (
@@ -212,6 +214,16 @@ function toIdList(spaceIds) {
 export function migrate(db) {
   inTransaction(db, () => {
     db.exec(SCHEMA_SQL);
+    // Additive upgrades for databases created before M3. Each step checks the live
+    // column list first, so re-running is a no-op.
+    const queueColumns = new Set(
+      db.prepare('PRAGMA table_info(memory_queue)').all().map((column) => column.name),
+    );
+    if (!queueColumns.has('dedupe_key')) db.exec('ALTER TABLE memory_queue ADD COLUMN dedupe_key TEXT');
+    if (!queueColumns.has('error')) db.exec('ALTER TABLE memory_queue ADD COLUMN error TEXT');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_memory_queue_dedupe ON memory_queue(dedupe_key)');
+    db.exec("CREATE INDEX IF NOT EXISTS idx_memory_queue_status ON memory_queue(status, created_at)");
+
     const current = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
     if (!(current >= SCHEMA_VERSION)) {
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);

@@ -26,8 +26,8 @@ test('resolveConfig() returns the documented defaults when raw is undefined', ()
   assert.equal(cfg.spaceRules, DEFAULT_SPACE_RULES);
   assert.equal(cfg.observeUsage, true);
   assert.equal(cfg.bootstrapMessages, true);
-  assert.equal(cfg.schemaVersion, 1);
-  assert.equal(SCHEMA_VERSION, 1);
+  assert.equal(cfg.schemaVersion, SCHEMA_VERSION);
+  assert.equal(SCHEMA_VERSION, 2);
   assert.equal(DEFAULT_SPACE_ID, 'space-default');
   assert.equal(DEFAULT_SPACE_NAME, 'Default space');
   assert.equal(DEFAULT_DATA_DIR, path.join(os.homedir(), '.dsh', 'context-array'));

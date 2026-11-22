@@ -18,3 +18,10 @@
         compactionMinFoldTokens: 8000  # never fold a smaller region
         compactionSummaryMaxTokens: 600
         enableEmbedding: true
+        # M3: central memory manager identities (deployment config, never model-set).
+        # Session ids are per-conversation: update this list when the admin session
+        # changes. M4's UI will bind roles into session_space_links instead.
+        adminSessionIds:
+          - ef62b67e-09a8-4f18-9424-c7b3aa449cef
+        queueStaleMinutes: 10
+        queueMaxRetries: 3

@@ -21,6 +21,9 @@ import {
   openStore,
 } from './src/db.js'
 import {
+  ADMIN_L3_ORDER,
+  ADMIN_L3_SECTION,
+  ADMIN_L3_TEXT,
   L1_ORDER,
   L1_SECTION,
   L1_TEXT,
@@ -41,6 +44,7 @@ import { createEmbeddingClient } from './src/embedding/client.js'
 import { createRetriever } from './src/retrieval.js'
 import { createMemorySearchTool } from './src/memory-tool.js'
 import { createContextCompactTool } from './src/compact-tool.js'
+import { createMemoryTools } from './src/memory-tools.js'
 
 export const name = 'dsh-context-array'
 export const inject = ['systemPrompt', 'llm', 'tools']
@@ -118,6 +122,21 @@ export function apply(ctx, rawConfig = {}) {
     warn('memory-tool')(error)
   }
 
+  // M3: proposal queue + the manager's write path. `memory_propose` is open to every
+  // session; claim/archive/settle self-gate on a server-side admin check.
+  try {
+    for (const tool of createMemoryTools({
+      db: store.db,
+      embedPassage: embedder ? (text) => embedder.embedPassage(text) : null,
+      config,
+      warn: warn('memory-tools'),
+    })) {
+      ctx.tools.register(tool)
+    }
+  } catch (error) {
+    warn('memory-tools')(error)
+  }
+
   // L1 and L3 are global and static, so every session on this deployment shares
   // the same bytes. The L1 text is a provider (not a literal) purely so the
   // diagnostic salt file can change node 0 while the observer keeps running; with
@@ -142,6 +161,8 @@ export function apply(ctx, rawConfig = {}) {
   // instead of leaving a stale prompt section behind.
   /** @type {Map<string, () => void>} */
   const agentSections = new Map()
+  /** Admin-role sections, keyed by session; same lifecycle rule. @type {Map<string, (() => void)[]>} */
+  const roleSections = new Map()
   ctx.effect(
     () => () => {
       for (const dispose of agentSections.values()) {
@@ -152,19 +173,33 @@ export function apply(ctx, rawConfig = {}) {
         }
       }
       agentSections.clear()
+      for (const disposers of roleSections.values()) {
+        for (const dispose of disposers) {
+          try {
+            dispose?.()
+          } catch {
+            // Same as above.
+          }
+        }
+      }
+      roleSections.clear()
     },
     'context-array:agent-sections',
   )
 
-  /** Withdraw one session's L4 section (agent disposal or plugin unload). */
+  /** Withdraw one session's sections (agent disposal or plugin unload). */
   function releaseAgentSection(sessionId) {
-    const dispose = agentSections.get(sessionId)
-    if (!dispose) return
-    agentSections.delete(sessionId)
-    try {
-      dispose()
-    } catch {
-      // Already withdrawn.
+    for (const map of [agentSections, roleSections]) {
+      const entry = map.get(sessionId)
+      if (entry === undefined) continue
+      map.delete(sessionId)
+      for (const dispose of Array.isArray(entry) ? entry : [entry]) {
+        try {
+          dispose()
+        } catch {
+          // Already withdrawn.
+        }
+      }
     }
   }
 
@@ -192,6 +227,20 @@ export function apply(ctx, rawConfig = {}) {
             interpolate: false,
           }),
         )
+      }
+
+      // M3: the central memory manager gets its own L3 section. Role comes from the
+      // deployment allow-list or the frozen binding — never from the model.
+      const isAdmin = config.adminSessionIds.includes(agent.id) || spaces.some((space) => space.role === 'admin')
+      if (isAdmin && !roleSections.has(agent.id)) {
+        roleSections.set(agent.id, [
+          agent.ctx.systemPrompt.section({
+            name: ADMIN_L3_SECTION,
+            order: ADMIN_L3_ORDER,
+            text: ADMIN_L3_TEXT,
+            interpolate: false,
+          }),
+        ])
       }
 
       if (!config.bootstrapMessages) return

@@ -252,6 +252,36 @@ export function createContextCompactTool({ compaction, warn })
 // { folded, compactionId, shadowedStart, shadowedEnd, shadowedTokenCount, keptNodes, reason? }.
 ```
 
+## `src/queue.js` (M3)
+
+```js
+export const QUEUE_STATUSES                    // pending | processing | done | rejected | failed
+export function proposalDedupeKey(sourceSessionId, rawContent, now)  // sha256(session + content + UTC hour)
+export function enqueueProposal(db, { sourceSessionId, rawContent, now })
+// -> { id, deduped }; never writes `memories`
+export function claimNext(db, { staleMinutes = 10, maxRetries = 3 })
+// one BEGIN IMMEDIATE: requeue stale processing -> fail exhausted pending -> UPDATE ... RETURNING oldest
+// -> claimed row (retry_count already incremented) or null
+export function settleClaim(db, id, status, { error })   // done|rejected|failed, processing only
+export function queueStats(db)                            // per-status counts + total
+```
+
+## `src/memory-tools.js` (M3)
+
+```js
+export function sessionBinding(db, sessionId)             // -> { spaceIds, role }
+export function createMemoryTools({ db, embedPassage, config, warn })
+// -> [memory_propose, memory_queue_claim, memory_archive, memory_queue_settle,
+//     memory_queue_stats]
+```
+- `memory_propose` is open to every session and only enqueues.
+- Claim/archive/settle/stats are admin-gated **server-side**: `session_space_links.role === 'admin'`
+  or `config.adminSessionIds` contains the caller's `exec.agent.id`. Tool arguments cannot name a
+  session or space that is not the caller's own; `memory_archive` re-checks `spaceId` membership and
+  rolls the whole insert back when `supersedesId` cannot be applied.
+- An embedder failure degrades to `embedded:false` (keyword retrieval still works) instead of failing
+  the archive.
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
@@ -260,8 +290,9 @@ export function createContextCompactTool({ compaction, warn })
 `compactionRetainRatio` (default `0.3`), `compactionMinFoldTokens` (default `8000`),
 `compactionSummaryMaxTokens` (default `600`), `promptSaltFile` (diagnostic; defaults to
 `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`), `modelsDir`
-(default `<dataDir>/models`), derived `dbPath`, `usageLogPath`, `eventsLogPath`,
-`schemaVersion`.
+(default `<dataDir>/models`), `adminSessionIds` (default `[]`),
+`queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), derived
+`dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
 
 ## Tests
 

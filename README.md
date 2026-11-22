@@ -8,13 +8,15 @@
 与 **M2**（本地 embedding + 混合检索）的实现，以及 **M0-6 压缩接管机制**、**M1-4 双轨缓存指标**。
 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)、[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)。
 
-> **状态**：M1、M2 已跑通并实测；**M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：
+> **状态**：M1、M2、M3 已跑通并实测。**M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：
 > 保留系统头、在轮次边界把较早区间换成一条 `compact-checkpoint` 摘要，金丝雀实测折了
 > 13 个节点 / 6,855 token 且会话继续正常。**两个受控实验也把"前缀被改动打穿"这条风险排除了**：
 > 该 `in-history` 路由上改提示词不会重写系统节点 0；运行期增删工具也不改声明块，`prefixHit` 恒 1。
 > 真正会打断缓存的是**压缩折叠**本身——这是设计上已知并接受的一次性代价，折叠轮次在
 > `events.jsonl` 里以 `history/replace` / `compaction/folded` 单独标记。
-> M2 的检索能力以 `memory_search` 工具暴露，按需调用（每轮自动注入留到 M3 有真实记忆之后）。
+> **M3** 中央记忆管理员与异步队列已跑通：普通会话 `memory_propose` 入队，管理员
+> `memory_queue_claim` → `memory_archive` 入库（本地 embedding），越权调用被服务端拒绝。
+> M4（留言箱 + 多空间 UI）待开工。
 
 ## 缓存节省测算（真实日志）
 
@@ -43,6 +45,7 @@
 | 本地 embedding | `src/embedding/client.js`、`src/embedding/worker.js` | worker 线程加载 `multilingual-e5-small`（384 维，q8 ONNX），主线程只做 async RPC；首次加载约 1.7 s，单条推理中位 12.5 ms，60 条排队时主线程定时器漂移中位 3 ms。 |
 | 混合检索 | `src/db-memories.js`、`src/retrieval.js` | 向量 top-20（点积=余弦）+ FTS5 trigram top-20（短查询 LIKE 兜底），RRF 融合（默认权重 **2:1**），按 token 预算截断，输出 `<memory>` 块；embedding 不可用时自动降级为关键词路。 |
 | 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`，模型不能指定 session/space。 |
+| 记忆管理员 | `src/queue.js`、`src/memory-tools.js`、`src/prompt.js` | `memory_propose` 任何会话只入队；`memory_queue_claim` / `memory_archive` / `memory_queue_settle` / `memory_queue_stats` 仅管理员。队列原子领取、过期接管、重试上限、小时桶去重；归档本地算 embedding、校验绑定空间、取代失败整体回滚；管理员会话额外注入防注入 L3 段。 |
 
 ## 三条最容易搞混的口径
 
@@ -95,6 +98,9 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `promptSaltFile` | `<dataDir>/prompt-salt.txt` | 诊断用：改这个文件可在观测层不停的情况下改 L1，做缓存受控实验 |
 | `enableEmbedding` | `true` | 关掉则只走关键词检索（不启动 worker、不加载模型） |
 | `modelsDir` | `<dataDir>/models` | 本地模型目录 |
+| `adminSessionIds` | `[]` | 中央记忆管理员的会话 id（部署配置，模型不可写；M4 会有 UI 绑定） |
+| `queueStaleMinutes` | `10` | 领取超过该分钟的 processing 行回到 pending |
+| `queueMaxRetries` | `3` | 重试达到该值的 pending 行置 failed |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
 > 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，
@@ -154,13 +160,16 @@ context_compact()
   模型 129 MiB 需单独下载（`tools/fetch-model.mjs`）。瘦身方案（省 ~158 MB）未实施。
 - 双轨指标只有 **8 个样本**（同一会话新代码加载后），`prefixTokens` 是字符启发式估算而非 provider 真值。
 - 样本不是规模验证；跨会话同账号复用、压缩折叠成本均未测。
-- 记忆管理员与留言箱属于 M3/M4，尚未实现。
+- 记忆管理员与留言箱属于 M3/M4：**M3 已实现**（见 `docs/M3-RESULTS.md`），留言箱与多空间 UI 属 M4。
+- 管理员资格目前靠 `adminSessionIds` 配置或 `session_space_links.role='admin'`；没有后台自动轮询，
+  `memory_queue_claim` 是按需调用的工具（是否常驻管理员见设计文档 §7）。
 
 ## 文档
 
 - 设计文档（第 0 节六项前置验证、L1–L5 分层、压缩接管、M2 实测）：[`dsh-context-array-v4.1.md`](dsh-context-array-v4.1.md)
 - M1 实测记录（含 M0-6 折叠实测）：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)
 - M2 实测记录（embedding + 检索评测）：[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)
+- M3 实测记录（管理员 + 异步队列）：[`docs/M3-RESULTS.md`](docs/M3-RESULTS.md)
 - 缓存节省测算：[`docs/CACHE-SAVINGS.md`](docs/CACHE-SAVINGS.md)
 - 插件详情页文案：[`docs/DETAIL.md`](docs/DETAIL.md)
 - 模块契约：[`CONTRACT.md`](CONTRACT.md)

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** Bumped together with the SQLite schema in src/db.js. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const DEFAULT_SPACE_ID = 'space-default';
 export const DEFAULT_SPACE_NAME = 'Default space';
@@ -111,6 +111,21 @@ export function resolveConfig(raw) {
         ? path.resolve(input.modelsDir.trim())
         : path.join(dataDir, 'models'),
     enableEmbedding: booleanOr(input.enableEmbedding, true),
+    // M3: sessions bootstrapped as central memory managers. M4's UI will bind roles
+    // into session_space_links; until then this list is the only way to designate an
+    // admin, and it is deployment config (never model-writable).
+    adminSessionIds: Array.isArray(input.adminSessionIds)
+      ? input.adminSessionIds.filter((value) => typeof value === 'string' && value.trim() !== '')
+      : [],
+    // M3 queue policy.
+    queueStaleMinutes:
+      Number.isSafeInteger(input.queueStaleMinutes) && input.queueStaleMinutes > 0
+        ? input.queueStaleMinutes
+        : 10,
+    queueMaxRetries:
+      Number.isSafeInteger(input.queueMaxRetries) && input.queueMaxRetries > 0
+        ? input.queueMaxRetries
+        : 3,
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),

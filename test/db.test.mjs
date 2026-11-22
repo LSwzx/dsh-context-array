@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolveConfig } from '../src/config.js';
+import { resolveConfig, SCHEMA_VERSION } from '../src/config.js';
 import {
   META_KEYS,
   bindSessionSpaces,
@@ -36,7 +36,13 @@ const REQUIRED_TABLES = [
   'meta',
   'session_bootstrap',
 ];
-const REQUIRED_INDEXES = ['idx_memories_space_valid', 'idx_wake_log_target', 'idx_wake_log_at'];
+const REQUIRED_INDEXES = [
+  'idx_memories_space_valid',
+  'idx_wake_log_target',
+  'idx_wake_log_at',
+  'idx_memory_queue_dedupe',
+  'idx_memory_queue_status',
+];
 const REQUIRED_TRIGGERS = ['memories_ai', 'memories_ad', 'memories_au'];
 
 /**
@@ -86,25 +92,25 @@ test('openStore() creates the data dir, a WAL database and migrates it', (t) => 
   assert.ok(fs.statSync(config.dbPath).isFile());
   assert.ok(config.dataDir.startsWith(dir));
   assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode, 'wal');
-  assert.equal(Number(db.prepare('PRAGMA user_version').get().user_version), 1);
+  assert.equal(Number(db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
   assert.equal(
     db.prepare('SELECT value FROM meta WHERE key = ?').get(META_KEYS.schemaVersion).value,
-    '1',
+    String(SCHEMA_VERSION),
   );
-  assert.deepEqual(store.meta, { schemaVersion: 1 });
+  assert.deepEqual(store.meta, { schemaVersion: SCHEMA_VERSION });
   assert.equal(store.config, config);
 });
 
 test('migrate() is idempotent and keeps recording the schema version', (t) => {
   const { db } = tempStore(t);
 
-  assert.deepEqual(migrate(db), { schemaVersion: 1 });
-  assert.deepEqual(migrate(db), { schemaVersion: 1 });
+  assert.deepEqual(migrate(db), { schemaVersion: SCHEMA_VERSION });
+  assert.deepEqual(migrate(db), { schemaVersion: SCHEMA_VERSION });
 
-  assert.equal(Number(db.prepare('PRAGMA user_version').get().user_version), 1);
+  assert.equal(Number(db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
   assert.equal(
     db.prepare('SELECT value FROM meta WHERE key = ?').get(META_KEYS.schemaVersion).value,
-    '1',
+    String(SCHEMA_VERSION),
   );
 });
 
@@ -122,7 +128,7 @@ test('reopening the same database path does not throw', (t) => {
   first.close();
   const second = openStore(config);
   stores.push(second);
-  assert.deepEqual(second.meta, { schemaVersion: 1 });
+  assert.deepEqual(second.meta, { schemaVersion: SCHEMA_VERSION });
   assert.deepEqual(listSpaces(second.db), []);
   second.close();
 
