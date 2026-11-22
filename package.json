@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-array",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Locally hosted five-dimension memory and KV-cache-first context assembly for DeepSeek Harness.",
@@ -43,7 +43,9 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["slots"]
+      "inject": [
+        "slots"
+      ]
     }
   },
   "license": "MIT",
