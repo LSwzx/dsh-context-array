@@ -119,23 +119,92 @@ disable/enable 造成的有效提示词变化，**都是追加新的 `system` �
 > 已知残留：修复前产生的那条 L4 注册已随旧 fiber 一起丢失 disposer，本会话会保留它
 > 直到该 Agent 销毁或 DSH 重启。文本与当前实现一致，不影响正确性。
 
+## M1-4 双轨指标与 M0-6 压缩接管（2026-11-22）
+
+这一天的工作补上了 v4.1.4 列出的两个阻塞项。结论如下，先给最重要的三条：
+
+1. **双轨指标已实现**：每个请求记录 `prefixHit / prefixTokens / prefixHitTokens / wholeHit`。
+2. **缓存存活时间远超假设**：会话空闲 **13.5 小时**后第一次请求仍然命中（`cacheReadTokens`
+   396,544，`wholeHit` 0.9974），2.4 小时那次也命中。文档里"TTL 小时级"的写法偏保守。
+3. **出现一个必须复核的反常现象**：工具声明从 62 个变成 63 个（`toolsDigest` 变了、
+   `prefixDigest` 跟着变），以及"禁用插件→重新启用"（系统节点 0 先消失再恢复）之后，
+   下一次请求的 `cacheReadTokens` **依然远大于整个 `prefixTokens`**（例如
+   `cacheRead=495,616` vs `prefixTokens=17,957`）。按"最长连续前缀匹配"的假设，前缀改动
+   应当让命中跌到工具声明那一段（约 16k）甚至接近 0，**实测没有跌**。在把这个现象查清
+   之前，文档 0.2-3 / 2 节规则 4 里"改前缀必失效"的推论都只能算未证实。
+
+### 指标定义与实现
+
+```text
+prefixTokens    = estimate(系统节点 0) + estimate(工具声明)   # 都是 DSH 固定启发式：4 字符/token + 固定开销
+prefixHitTokens = min(prefixTokens, cacheReadTokens)          # provider 命中是最长前导匹配
+prefixHit       = prefixHitTokens / prefixTokens
+wholeHit        = cacheRead / (input + cacheRead + cacheWrite)
+```
+
+实测的 `prefixTokens ≈ 17,957`，其中**系统节点 1,833、工具声明 16,124 —— 工具占 89.8%**。
+也就是说这套架构真正要保护的前缀，绝大部分是工具声明，而不是我们写的 L1–L4 文本；
+优化前缀长度时应该先看工具面。
+
+### 实测数字
+
+- 新代码加载后共 **8 个请求**（长会话 `ef62b67e…`）带双轨字段：
+  `prefixHit` min/mean/max = **1 / 1 / 1**（0 个部分命中），
+  `wholeHit` 0.9955 / 0.9978 / 0.9994，
+  `cacheReadTokens - prefixTokens` 的最小余量 **477,659**。
+- **TTL 探针**（日志空档分析）：间隔 808 分钟与 146.5 分钟后的首请求都命中了。
+  → 该路由/账号下缓存存活 **≥ 13.5 小时**。"小时级 TTL"不再是风险假设。
+- **跨会话/同账号**：另一个会话（子代理）首请求 `cacheRead=0`，但它的系统提示词与主会话
+  不同（子代理上下文），因此**不能**用它判定"同账号跨会话复用"；需要两个前缀完全一致的
+  会话做受控实验，尚未做。
+
+### M0-6 压缩接管：机制已验证，折叠策略未实现
+
+- 插件新增 `compactionMode: off | observe`。`observe` 会用
+  `ctx.provide('compaction', 实现)` 认领 seam，`compactIfNeeded` / `compactNow` 只记录、
+  **永远返回 `null` 不折叠**；`compactRegion` 直接抛"未实现"。
+- 实测事件（`events.jsonl`）：
+
+  ```json
+  {"type":"compaction/provider-installed","mode":"observe"}
+  {"type":"compaction/pressure","sessionId":"ef62b67e…","pressureTokens":495613,"contextWindow":1048576,"warnTokens":300000}
+  ```
+
+  → 本 profile 里 `compaction-basic` 未加载，所以 `ctx.provide` 没有冲突，接管成功；
+  每轮 pre-step 都能读到压力（约 47% 窗口）。**折叠策略没有实现**，所以 `observe` 期间
+  不会发生任何压缩——与接管前的现状一致（该 profile 本来就没有实现者）。
+- 任何 `surfaceOp: replace` 事件都会被 `history/replace` 记录，用于把"前缀被重写"的
+  轮次从稳态统计里剔除；实测期间该计数为 **0**，说明没有发生压缩或剪枝。
+
+### 待复核的实验设计（下一轮）
+
+用同一会话、同一工具集，**在观测层保持运行的前提下**只改系统节点 0 的一段文本
+（例如加一个只有内容不同的 `promptSalt` 配置），然后看下一个请求的
+`cacheReadTokens` 是否真的跌到 `prefixTokens` 以下。如果仍然不跌，说明
+DeepSeek 的 `prompt_cache_hit_tokens` 不是严格连续前缀匹配，整套"保护前缀"的收益模型
+需要重写；如果跌了，则 M1-4 指标成立，且本轮异常可以用"改动落在未缓存分块内"解释。
+
 ## 复现方式
 
 ```powershell
 cd D:\dshprogram\dsh-context-array
-node --test                                  # 54 项单测
-node docs\analyze-usage.mjs                  # 汇总真实 usage.jsonl
+node --test                                  # 73 项单测
+node docs\analyze-usage.mjs                  # 双轨指标 + TTL 空档 + 压缩事件
 Get-Content "$env:USERPROFILE\.dsh\context-array\usage.jsonl" -Tail 5
+Get-Content "$env:USERPROFILE\.dsh\context-array\events.jsonl" -Tail 5
 ```
 
-插件安装后任意新会话或任意一次模型请求都会落一行记录；`prefixDigest` 相同即前缀未变。
+插件安装后任意新会话或任意一次模型请求都会落一行记录；`prefixDigest` 相同即"节点 0 +
+工具声明"未变；`events.jsonl` 记录接管、压力与历史替换。
 
 ## 局限
 
 1. **只能拿到规范化 usage**。原始 provider JSON 不可达，`usageSource` 字段已标注。
-2. **样本只有 2 个会话**（一个长历史、一个冷启动），且都来自同一个 Desktop profile；
-   「多会话」在 M1 只覆盖到并发两会话，不是规模验证。
-3. **本 profile 未启用 `compaction-basic`**，实测期间压缩没有发生，因此没有观测到
-   「压缩导致前缀失效」的样本；文档 0.2-5 的压缩轮次标注仍是设计约定，未被实测覆盖。
-4. 反复 disable/enable 会让 `systemMessageCount` 增长（每次有效提示词变化追加一份快照），
-   这是本次实测的人为操作，不是正常运行时行为；正常使用下该值应稳定在 1–2。
+2. **双轨指标只有 8 个样本**（同一会话、同一天新代码加载后），且 `prefixTokens` 是字符
+   启发式估算，不是 provider 真值；`prefixHit` 依赖"命中=最长前导匹配"的假设，而该假设
+   正被上面那个反常现象挑战。
+3. **压缩接管只验证了"能认领"，没有验证"能折叠"**：折叠策略（何时、折哪段、摘要怎么生成）
+   尚未实现；`observe` 模式下长会话不会被压缩。
+4. TTL 只观测到"≥ 13.5 小时仍有命中"，没有测到失效边界；跨会话同账号复用未做受控实验。
+5. 反复 disable/enable 会让 `systemMessageCount` 增长（每次有效提示词变化追加一份快照），
+   这是本次实测的人为操作，不是正常运行时行为。

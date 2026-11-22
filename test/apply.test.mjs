@@ -54,7 +54,17 @@ function createFakeHost() {
       return undefined
     },
   }
-  return { ctx, agent, sections, agentSections, listeners, effects }
+  const provided = []
+  ctx.provide = (name, value) => {
+    provided.push({ name, value })
+    return () => {}
+  }
+  ctx.get = (name) => {
+    if (name === 'tokenMeter') return { contextPressure: () => ({ pressureTokens: 0, contextWindow: 1_048_576 }) }
+    if (name === 'agents') return undefined
+    return undefined
+  }
+  return { ctx, agent, sections, agentSections, listeners, effects, provided }
 }
 
 /**
@@ -62,10 +72,10 @@ function createFakeHost() {
  * Disposers run before the directory is removed, because Windows cannot delete
  * an open SQLite file.
  */
-function setup(t) {
+function setup(t, config = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-apply-'))
   const host = createFakeHost()
-  apply(host.ctx, { dataDir })
+  apply(host.ctx, { dataDir, ...config })
   t.after(() => {
     for (const dispose of host.effects) {
       try {
@@ -223,6 +233,39 @@ test('agents already live at activation are bootstrapped without agent/created',
   assert.match(live.sections[0].text, /space: space-default/)
   assert.equal(live.injected.length, 1)
   assert.match(live.injected[0].content[0].text, /<context-array-bootstrap>/)
+})
+
+test('compaction takeover is opt-in: default leaves the seam untouched', (t) => {
+  const { host } = setup(t)
+  assert.equal(host.provided.length, 0, 'off mode must not claim ctx.compaction')
+})
+
+test('observe mode claims the seam once and records it in events.jsonl', (t) => {
+  const { dataDir, host } = setup(t, { compactionMode: 'observe' })
+  assert.equal(host.provided.length, 1)
+  assert.equal(host.provided[0].name, 'compaction')
+  assert.equal(typeof host.provided[0].value.compactIfNeeded, 'function')
+
+  const events = fs
+    .readFileSync(path.join(dataDir, 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assert.equal(events[0].type, 'compaction/provider-installed')
+})
+
+test('history replacement events are recorded even with compaction off', (t) => {
+  const { dataDir, host } = setup(t)
+  const [sessionEvent] = host.listeners.get('session/event') ?? []
+  assert.equal(typeof sessionEvent, 'function')
+  sessionEvent({ id: 'session-1' }, { type: 'user/message', seq: 9, surfaceOp: { op: 'replace', startSeq: 1, endSeq: 8 } })
+  const events = fs
+    .readFileSync(path.join(dataDir, 'events.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assert.equal(events[0].type, 'history/replace')
+  assert.equal(events[0].sessionId, 'session-1')
 })
 
 test('the llm/stream listener records usage and passes chunks through', async (t) => {

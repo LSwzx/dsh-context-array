@@ -4,21 +4,25 @@
 **绝不重写被缓存的前缀**。动态内容一律追加在已缓存历史之后，静态内容只在拼装阶段注册。
 
 当前仓库包含设计文档
-[`dsh-context-array-v4.1.md`](dsh-context-array-v4.1.md) 里程碑 **M1** 的完整实现，
-以及端到端实测记录 [`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)。
+[`dsh-context-array-v4.1.md`](dsh-context-array-v4.1.md) 里程碑 **M1** 的实现、
+**M0-6 压缩接管机制**、**M1-4 双轨缓存指标**，以及端到端实测记录
+[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)。
 
-> **状态**：M1 已实现并在真实会话中跑通。
-> **M0 第六项（压缩接管）尚未验证**，它是 M2 的开工前提——DSH 自带压缩会在阈值处
-> 原地替换历史，替换点之后缓存必然失效；不收编它，这套架构的前提当场作废。
+> **状态**：M1 已跑通；M0-6 的"接管"已验证（能认领 `ctx.compaction`、能看到压力），
+> 但**折叠策略未实现**，`observe` 模式下不会发生压缩；M1-4 双轨指标已上线。
+> **另有一个待复核的反常现象**：实测中改动前缀（工具数 62→63、系统节点消失后恢复）后
+> 缓存命中并没有按预期下跌，`cacheReadTokens` 仍远大于 `prefixTokens`。在受控实验出结果前，
+> "改前缀必失效"只算未证实假设（详见 M1-RESULTS 的"反常现象"一节）。
 
-## M1 实现了什么
+## 已实现的东西
 
 | 组成 | 文件 | 行为 |
 |---|---|---|
 | L1/L3/L4 提示词段 | `src/prompt.js`、`index.js` | L1（基础规则）与 L3（角色规则）是全局静态段；L4（空间规则）按会话作用域注册，文本来自每会话快照——改空间描述不会改写已存在会话的系统节点。L2 是请求里的工具声明，不归本插件注册。 |
 | 静态存储 | `src/db.js` | 用运行时自带的 `node:sqlite`（无需原生编译）：空间、会话绑定、五维记忆、FTS5 `trigram` 索引与外部内容表触发器、inbox、记忆队列、L4 快照、唤醒日志。 |
-| usage 观测 | `src/observer.js` | 包裹 `llm/stream` waterfall，原样透传每个分块，同时为每个请求写一行 JSONL：规范化 `usage`、`hitRate`，以及 `systemDigest` / `systemDigestAll` / `toolsDigest` / `prefixDigest`。 |
+| usage 观测 | `src/observer.js`、`src/prefix.js` | 包裹 `llm/stream` waterfall，原样透传每个分块，同时为每个请求写一行 JSONL：规范化 `usage`、`wholeHit`、**双轨指标 `prefixHit` / `prefixTokens` / `prefixHitTokens`**，以及 `systemDigest` / `systemDigestAll` / `toolsDigest` / `prefixDigest`。 |
 | 追加层 | `src/append.js`、`index.js` | 每个新会话注入一条 bootstrap 快照，走 `agent.inject()`：排队到下一次 `agent/pre-step`，不唤醒 Agent，也不碰已缓存前缀。 |
+| 压缩接管 | `src/compaction.js` | `compactionMode: observe` 时用 `ctx.provide('compaction', …)` 认领 seam，记录压力采样，**从不折叠**；同时侦测任何 `surfaceOp: replace` 并写入 `events.jsonl`。 |
 
 ## 三条最容易搞混的口径
 
@@ -27,12 +31,12 @@
    `system` 消息，节点 0 不变——所以还要看 `systemMessageCount`（是否变多）与
    `systemDigestAll`（有效提示词是否变了）。
 2. **命中率必须双轨**：
-   - `prefix_hit = 命中的 L1–L4 token / L1–L4 总长` —— 这才是架构指标（目标 ≥ 95%）；
-   - `whole_hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` —— 只是成本参考。
-   只报 `whole_hit` 会得到假数据：L5 每轮追加时它天然很高，掩盖前缀其实没被保护。
-   **当前代码只算了 `whole_hit`，`prefix_hit` 尚未实现（M1-4）。**
-3. **缓存前提尚未实测**：DeepSeek 缓存有 TTL（小时级，不是永久），跨会话复用要求同一账号 /
-   同一 key。这两条写进了验收条件，但还没跑过验证。
+   - `prefixHit = min(prefixTokens, cacheReadTokens) / prefixTokens` —— 架构指标（目标 ≥ 95%）。
+     `prefixTokens` 用 DSH 固定启发式估算"系统节点 0 + 工具声明"；实测 17,957 里**工具占 89.8%**。
+   - `wholeHit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` —— 只是成本参考。
+   只报 `wholeHit` 会得到假数据：L5 每轮追加时它天然很高，掩盖前缀其实没被保护。
+3. **缓存前提的实测状态**：TTL 已实测 **≥ 13.5 小时**（空闲 808 分钟后首请求仍命中 396,544 token）；
+   **跨会话是否要求同账号仍未验证**（缺少前缀一致的两个会话做对照）。
 
 ## 安装
 
@@ -51,20 +55,28 @@
 
 | 键 | 默认值 | 含义 |
 |---|---|---|
-| `dataDir` | `<home>/.dsh/context-array` | SQLite 库与 `usage.jsonl` 的目录 |
+| `dataDir` | `<home>/.dsh/context-array` | SQLite 库、`usage.jsonl`、`events.jsonl` 的目录 |
 | `spaceId` / `spaceName` / `spaceRules` | `space-default` / `Default space` / … | 首次激活时创建的单一静态空间 |
 | `observeUsage` | `true` | 每个上报 usage 的请求写一行记录 |
 | `bootstrapMessages` | `true` | 每个新会话注入一条 bootstrap 快照 |
+| `compactionMode` | `observe` | `off` 不动部署；`observe` 认领 `ctx.compaction` 但**永不折叠**（实测模式） |
+| `compactionWarnTokens` | `300000` | `observe` 模式下压力采样阈值（token） |
+
+> ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
+> 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，
+> 默认实现加载失败）。
 
 ## 验证
 
 ```powershell
-node --test                              # 单元 + 接线测试（54 项）
-node docs/analyze-usage.mjs              # 汇总已抓到的 usage 日志
+node --test                              # 单元 + 接线测试（73 项）
+node docs/analyze-usage.mjs              # 双轨指标 + TTL 空档 + 压缩事件
 Get-Content "$env:USERPROFILE\.dsh\context-array\usage.jsonl" -Tail 3
+Get-Content "$env:USERPROFILE\.dsh\context-array\events.jsonl" -Tail 3
 ```
 
-每个请求一行，字段含义见 [`docs/DETAIL.md`](docs/DETAIL.md)。
+每个请求一行，字段含义见 [`docs/DETAIL.md`](docs/DETAIL.md)；`events.jsonl` 记录接管、
+压力采样与历史替换。
 
 ## 实测结果（整段口径，样本 = 2 个会话 / 98 条请求）
 
@@ -87,8 +99,15 @@ Get-Content "$env:USERPROFILE\.dsh\context-array\usage.jsonl" -Tail 3
 
 - 插件只能拿到适配器折算后的规范化 `TokenUsage`，**原始 provider usage JSON 不可达**；
   记录以 `usageSource: "normalized-usage-chunk"` 标注。
-- 本 profile 未启用 `compaction-basic`，实测期间**没有压缩样本**；压缩接管（M0-6）未验证。
-- 样本只有 2 个会话，不是规模验证；`prefix_hit`、缓存 TTL、同账号前提均待补测（M1-4）。
+- **压缩只验证了"接管"，没验证"折叠"**：`observe` 模式认领 seam 但不折叠；本 profile
+  本来也没有 `compaction-basic`，所以行为与接管前一致。真正折叠需要调用表层替换 API，
+  尚未实现。
+- **前缀改写后命中不跌的反常现象待复核**（工具数 62→63、节点 0 消失后恢复，`cacheRead`
+  仍 ≈ 495k）。受控实验（只改节点 0 一段文本、观测层不断）尚未做；在它出结果前，
+  "改前缀必失效"不是已证事实。
+- 双轨指标只有 **8 个样本**（同一天、同一会话新代码加载后），`prefixTokens` 是字符启发式
+  估算而非 provider 真值。
+- 样本不是规模验证；跨会话同账号复用、压缩折叠成本均未测。
 - embedding / 检索 / 记忆管理员 / 留言箱属于 M2–M4，尚未实现；M2 第一个实验是
   "在 worker 或子进程里加载 `multilingual-e5-small` 并输出一条 384 维向量"，
   因为 onnxruntime 的 CPU 推理是同步阻塞的，放主进程会卡死整个 Host。

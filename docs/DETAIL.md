@@ -46,32 +46,41 @@ that reports usage:
 ```json
 {
   "schema": 1,
-  "at": "2026-11-21T13:36:58.692Z",
+  "at": "2026-11-22T06:47:07.509Z",
   "sessionId": "…",
   "provider": "deepseek-official",
   "model": "deepseek-flash",
-  "messageCount": 330,
-  "toolCount": 62,
-  "systemMessageCount": 1,
+  "messageCount": 383,
+  "toolCount": 63,
+  "systemMessageCount": 8,
   "systemDigest": "…",
   "systemDigestAll": "…",
   "toolsDigest": "…",
   "prefixDigest": "…",
-  "usage": { "inputTokens": 2249, "outputTokens": 491, "cacheReadTokens": 332288, "cacheWriteTokens": 0, "totalTokens": 335028 },
-  "hitRate": 0.993277,
-  "inputTokens": 2249,
-  "cacheReadTokens": 332288,
+  "usage": { "inputTokens": 2242, "outputTokens": 401, "cacheReadTokens": 495616, "cacheWriteTokens": 0, "totalTokens": 498259 },
+  "hitRate": 0.995497,
+  "wholeHit": 0.995497,
+  "prefixHit": 1,
+  "prefixTokens": 17957,
+  "prefixHitTokens": 17957,
+  "systemTokens": 1833,
+  "toolTokens": 16124,
+  "inputTokens": 2242,
+  "cacheReadTokens": 495616,
   "cacheWriteTokens": 0,
   "usageSource": "normalized-usage-chunk"
 }
 ```
 
-`prefixDigest` is the cache metric: two requests with the same digest sent the same
-system node and the same tool declarations, which is exactly what DeepSeek's prefix
-cache needs. `systemDigest` covers node 0 only; `systemMessageCount` and
-`systemDigestAll` expose a prompt that DSH appended in history
-(`systemPromptUpdate: 'in-history'`) — those keep the prefix reusable but add tokens
-for every retained version.
+`prefixDigest` covers system node 0 + the tool declarations. `prefixHit` is the
+architecture metric: `min(prefixTokens, cacheReadTokens) / prefixTokens`, where
+`prefixTokens` prices node 0 plus the tool schemas with DSH's fixed heuristic
+(four characters per token plus framing). `wholeHit` is the provider-reported
+share and only a cost reference. `systemMessageCount` / `systemDigestAll` expose
+a prompt DSH appended in history (`systemPromptUpdate: 'in-history'`).
+
+A second log, `events.jsonl`, records `compaction/provider-installed`,
+`compaction/pressure`, `history/replace` and `compaction/provider-conflict`.
 
 ### 4. Append layer
 

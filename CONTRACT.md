@@ -93,6 +93,12 @@ On `chunk.type === 'usage'` build one record and append one JSON line to `logPat
   "systemDigestAll": "sha256-of-all-system-role-message-texts-joined",
   "toolsDigest": "sha256-of-canonical-json-of-tool-names-and-parameters",
   "prefixDigest": "sha256(systemDigest + ':' + toolsDigest)",
+  "wholeHit": 0.0,
+  "prefixHit": 0.0,
+  "prefixTokens": 0,
+  "prefixHitTokens": 0,
+  "systemTokens": 0,
+  "toolTokens": 0,
   "usage": { ...the normalized TokenUsage object verbatim... },
   "hitRate": 0.0,
   "inputTokens": 0,
@@ -105,6 +111,7 @@ Rules:
 - `hitRate = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`; `0` when the denominator is 0; round to 6 decimals.
 - `usage` must be the **normalized** object exactly as received (DeepSeek's raw `prompt_cache_hit_tokens` is not exposed by the adapter — record `usageSource: 'normalized-usage-chunk'` in the record so the limitation is explicit).
 - Message text extraction: a message's `content` is an array of blocks; use `block.type === 'text' ? block.text : ''`; the payload is frozen, never mutate it.
+- `wholeHit` is the provider-reported share; `prefixHit` is the architecture metric from `src/prefix.js` (`min(prefixTokens, cacheReadTokens) / prefixTokens`, node 0 + tools only, DSH's fixed 4-chars-per-token heuristic). Both must be recorded; never present `wholeHit` as the architecture number.
 - Append with `fs.appendFileSync` (sync, no ordering races) after creating the directory once.
 - `readLog()` returns parsed records; tolerate a truncated last line.
 - `stats()` returns `{ requests, meanHitRate, lastAt }`.
@@ -127,6 +134,53 @@ export function deliverBootstrap(agent, message, { onError } = {})
 // NEVER throw: a failed bootstrap must not break the turn.
 ```
 The injected message is queued by `agent.inject()` for the next `agent/pre-step` (it does **not** wake the agent), which is exactly the M1 "append layer": appended after `step/start`, never touching the L1–L4 prefix.
+
+## `src/prefix.js`
+
+```js
+export function estimateSystemMessage(message)      // ceil(text chars / 4) + 4; 0 for empty content
+export function estimateToolsTokens(tools)          // ceil(JSON.length / 4) + 4; 0 when absent/empty
+export function computePrefixMetrics({ messages, tools, usage })
+// -> { systemTokens, toolTokens, prefixTokens, prefixHitTokens, prefixHit, wholeHit }
+```
+Identical to DSH's fixed estimator (`dsh-token-meter/src/estimate.ts`). Only the FIRST
+system-role message counts as prefix; in-history system appends are history, not prefix.
+
+## `src/events.js`
+
+```js
+export function createEventLog({ logPath, now, onError }) // -> { append(record) }
+```
+One JSONL line per fact, `at` ISO timestamp prepended, every write guarded.
+
+## `src/compaction.js`
+
+```js
+export const COMPACTION_MODES // ['off', 'observe']
+
+export function createCompactionProvider({ mode, events, now })
+// -> { name: 'compaction', compactIfNeeded, compactNow, compactRegion }
+// compactIfNeeded/compactNow record a sample and return null (never fold);
+// compactRegion throws (destructive path not implemented).
+
+export function installCompactionTakeover({ ctx, config, events, warn, now })
+// 'off' -> { installed: false, reason: 'off' } and nothing is claimed.
+// 'observe' -> ctx.provide('compaction', provider) + per-session pressure sampling
+//              (throttled to one sample per session per minute above warnTokens).
+//              A taken seam reports { installed: false, reason: 'conflict' } and logs
+//              compaction/provider-conflict instead of pretending success.
+
+export function installHistoryReplacementWatch({ ctx, events, warn })
+// Records every session event carrying surfaceOp.op === 'replace' as history/replace.
+```
+Takeover REQUIRES the default implementer to be absent (`dsh-compaction-basic` disabled
+by patch row); two providers in one context cannot coexist.
+
+## Config keys
+
+`dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
+`compactionMode` (`off` | `observe`, defaults to `off`), `compactionWarnTokens`
+(default `300000`), derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
 
 ## Tests
 

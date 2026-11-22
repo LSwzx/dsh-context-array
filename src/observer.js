@@ -12,6 +12,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
+import { computePrefixMetrics } from './prefix.js'
+
 /** Record shape version; bump together with CONTRACT.md. */
 const SCHEMA = 1
 /** DeepSeek's raw `prompt_cache_hit_tokens` never reaches the adapter, so the record says where its numbers came from. */
@@ -180,6 +182,7 @@ export function createUsageObserver({ logPath, now = () => Date.now(), onError =
     const cacheReadTokens = tokenCount(usage, 'cacheReadTokens')
     const cacheWriteTokens = tokenCount(usage, 'cacheWriteTokens')
     const billedInput = inputTokens + cacheReadTokens + cacheWriteTokens
+    const prefix = computePrefixMetrics({ messages, tools, usage })
 
     return {
       schema: SCHEMA,
@@ -198,6 +201,14 @@ export function createUsageObserver({ logPath, now = () => Date.now(), onError =
       // Exactly the normalized TokenUsage object as received.
       usage,
       hitRate: billedInput > 0 ? round6(cacheReadTokens / billedInput) : 0,
+      // M1-4 dual metrics: wholeHit is the provider-reported share; prefixHit is
+      // the share of the L1–L4 prefix that came from cache (the architecture metric).
+      wholeHit: billedInput > 0 ? round6(cacheReadTokens / billedInput) : 0,
+      prefixHit: prefix.prefixHit,
+      prefixTokens: prefix.prefixTokens,
+      prefixHitTokens: prefix.prefixHitTokens,
+      systemTokens: prefix.systemTokens,
+      toolTokens: prefix.toolTokens,
       inputTokens,
       cacheReadTokens,
       cacheWriteTokens,

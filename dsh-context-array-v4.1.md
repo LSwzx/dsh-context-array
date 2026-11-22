@@ -1,10 +1,10 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.1.4)
+# dsh-context-array 产品需求与技术架构文档 (v4.1.5)
 
-整合 v4.0 全部需求与 v4.1 修订清单；第 0 节前置验证（v4.1.1 五项 + v4.1.4 补第六项），代码与描述勘误（v4.1.2），M1 端到端实测（v4.1.3），压缩与指标口径修订（v4.1.4）。状态：M1 已实现并验证；**M0 第六项（压缩接管）未验证，是 M2 的开工前提**。
+整合 v4.0 全部需求与 v4.1 修订清单；第 0 节前置验证（v4.1.1 五项 + v4.1.4 第六项），代码与描述勘误（v4.1.2），M1 端到端实测（v4.1.3），压缩与指标口径修订（v4.1.4），M0-6 / M1-4 实测完成（v4.1.5）。状态：M1、M0-6（接管机制）、M1-4 已完成；**压缩折叠策略尚未实现**，且发现一个待复核的缓存行为异常（见 0.1-⑥ 与 `docs/M1-RESULTS.md`）。
 
 ## 0. 前置验证（动手前必须完成）
 
-以下六项未确认之前，文档中依赖它们的设计均为假设。前五项已全部填回，第六项为 v4.1.4 新增、**尚未验证**。
+以下六项未确认之前，文档中依赖它们的设计均为假设。六项均已有实测结论（第六项 v4.1.5 完成）。
 
 验证环境：第 0 节取数时该安装的 `@deepseek-ai/dsh` 为 `0.2.2-rc.3`；M1 端到端实测所在实例为 `0.2.2-rc.5`（本会话中途 DSH 重启/更新过一次，Desktop profile，Electron + Node 24.21.0，内置 SQLite 3.53.4）。实测时间 2026-11-21。下文的 `packages/...`、`docs/...` 路径均取自该安装的 `D:\progranfile\dsh\resources\app.asar\dsh\node_modules\@deepseek-ai\`。
 
@@ -17,7 +17,7 @@
 | 3 | session_id 从何处获取 | 会话与空间绑定 | **能稳定获取**。`SessionId`（品牌化字符串）即持久会话身份：工具内 `exec.agent.id`；提示词提供方内 `context.agent.id`（`AssembleContext.agent`）；事件侧 `session/created`、`session/event`、`agent/created`；请求侧 `GenerateOptions.sessionId`。见 0.1-③ |
 | 4 | 工具注册方式与参数结构；运行时能否保证工具顺序固定 | L2 | **能**。注册用 `ctx.tools.register(defineTool({name, description, parameters, output, execute, ...}), { when? })`，其中 `output`（schema + render）为必填契约。顺序由 `toolOrder` 配置（须含一次 `<unlisted-tools>` 占位）决定，未配置则**字典序**，权威顺序写入 `request/header`；与注册顺序无关。见 0.1-④ |
 | 5 | 能否通过 API 唤醒空闲会话 | 留言箱是主动推送还是下一轮拉取 | **能，但"唤醒"≠"免费"**。`agent.inject()` 只排队、**不唤醒**，空闲会话实际要等下一次 pre-step 才看到（等价于"下一轮拉取"）；要让空闲会话**立即行动**必须用 `agent.followup()`（开新轮、计费一次模型请求），宿主侧可用 `ctx.schedule.run()`，同树可用 `ctx.subagents.sendMessage()`。主动唤醒受 3.4 的冷却与频率上限约束。见 0.1-⑤ |
-| 6 | 能否替换/禁用默认压缩策略，并在插件里接管压缩（自己做"压缩 = 追加摘要 + 保留原始历史锚点"） | **全局前提（L1–L5 全部依赖它）** | **能接管，但不能做成"纯追加"**。`ctx.compaction` 是能力 seam（抽象服务），`ctx.provide('compaction', 实现)` 可装自己的实现，且默认实现 `dsh-compaction-basic` 可用 patch 行 `disabled: true` 关掉；但 seam 的既定语义是"把选中的 surface 区间替换成一个摘要节点"，**不替换就无法缩减 token**，上下文窗口终究会撞上限（1,048,576）。可行方案：接管"何时折叠 / 折叠哪一段 / 折叠后立刻重建可复用前缀"，并让观测层识别压缩事件、把压缩轮次单独标注。见 0.1-⑥（**待实跑**） |
+| 6 | 能否替换/禁用默认压缩策略，并在插件里接管压缩（自己做"压缩 = 追加摘要 + 保留原始历史锚点"） | **全局前提（L1–L5 全部依赖它）** | **接管机制已验证（v4.1.5）；"纯追加"仍不成立，折叠策略未实现**。`ctx.compaction` 是能力 seam，`ctx.provide('compaction', 实现)` 可装自己的实现，默认实现 `dsh-compaction-basic` 可用 patch 行 `disabled: true` 关掉；但 seam 的既定语义是"把选中的 surface 区间替换成一个摘要节点"，**不替换就无法缩减 token**。实测：本 profile 里 `compaction-basic` 未加载，插件以 `observe` 模式成功认领 seam（`compaction/provider-installed`），每轮 pre-step 能读到压力（495,613 / 1,048,576 ≈ 47%），且**从不折叠**。见 0.1-⑥ |
 
 ### 0.1 结论细节与证据
 
@@ -71,6 +71,11 @@
   3. 观测层订阅 `session/event`：见到 `compaction/start|summary|end` 或任何 `surfaceOp: replace` 就打一条 `event: compaction` 记录，把该轮/该请求从"稳态命中率"统计里**单独标注**；
   4. 备选方案（若 seam 实现风险过高）：不禁用压缩，但把折叠阈值调高、并接受"每次折叠一次全价前缀"。这需要实测成本差异后再定。
 - **必须实跑确认的点**：`ctx.provide('compaction', …)` 在真实 Host 里能否成功装载并拒绝并发；`CompactResult` 的 `compactionCheckpointSource` 替换消息契约；接管后 `agent/pre-step` 的压力判断是否仍由循环触发（说明文字：压力压缩在 `agent/pre-step` 与 `agent/request` 两个入口按 header 执行）；`image-offload` 的替换是否也需禁用。
+- **v4.1.5 实测结果**（详见 `docs/M1-RESULTS.md`）：
+  - 本 profile 无 `compaction-basic` 实现者，插件以 `compactionMode: observe` 成功 `ctx.provide('compaction', …)`，`events.jsonl` 记录到 `compaction/provider-installed` 与多轮 `compaction/pressure`（495,613 / 1,048,576）。
+  - `observe` 模式**永不折叠**：`compactIfNeeded`/`compactNow` 返回 `null`，`compactRegion` 抛"未实现"；实测 `history/replace` 计数为 0。
+  - 因此"接管"这一半已验证；**"折叠"这一半没有实现**，也还没有验证 `CompactResult` / checkpoint 契约——那需要真正调用 session 的表层替换 API，属于 M2 之后的工作。
+  - 待复核：究竟何时该折叠。文档原设想"压缩 = 追加摘要 + 保留原历史锚点"只适用于不关心 token 预算的场景；实际必须周期性真折叠并接受一次前缀失效。折叠阈值与保留尾部策略见 §7 待定项。
 
 ### 0.2 据验证结论对本设计的强制约束
 
@@ -84,7 +89,7 @@
 8. BLOB 读出必须拷贝：`node:sqlite` 返回 `Uint8Array`，其 `byteOffset` 不保证 4 字节对齐，`new Float32Array(buf.buffer, buf.byteOffset, …)` 会抛 `RangeError`（已实测复现），一律用 `new Float32Array(buf.buffer.slice(byteOffset, byteOffset + byteLength))`。
 9. **压缩必须先定归属**（M0-6）：要么禁用默认实现并接管，要么显式接受"自动折叠会打断缓存"。未定之前不进入 M2——这一条不成立，L1–L5 的前提在第一次自动压缩时就作废。
 10. **指标双轨**：`prefix_hit = 命中的 L1–L4 token / L1–L4 总长`（架构指标，目标 ≥ 95%）与 `whole_hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`（成本参考）。只报整段命中率是假数据：L5 每轮追加、L1–L4 不变时整段命中天然很高，掩盖前缀没被保护的情况。
-11. **缓存前提必须实测、不得假设**：DeepSeek 缓存有 **TTL（小时级，非永久）**；跨会话复用要求**同一账号 / 同一 key**。两条都要写进验收记录，并在 M1-4 里实测。
+11. **缓存前提的实测状态**：TTL 已实测 **≥ 13.5 小时**（空闲 808 分钟后仍命中）；**跨会话是否要求同账号/同 key 仍未验证**。两条都写进验收记录，不靠假设。
 12. **身份与归属只由宿主注入**：`check_inbox` 等工具的调用者身份取 `exec.agent.id`（宿主执行上下文），`space` 归属由后端按该 `session_id` 查绑定表；**`session_id` / `space_id` 绝不作为工具参数**，否则一次提示注入即可越权读别人的留言。
 13. **并发写 SQLite 必须** `PRAGMA journal_mode = WAL` + `PRAGMA busy_timeout`（现实现为 5000ms，见 `src/db.js`），否则多会话并发写会随机 `SQLITE_BUSY`。
 
@@ -125,9 +130,10 @@
 3. **验收标准（双轨，缺一不可）**：
    - `prefix_hit = 命中的 L1–L4 token / L1–L4 总长`：**这才是这套架构保护的东西**。目标 ≥ 95%（L1–L4 逐字节不变时在缓存存活期内应接近全命中）。
    - `whole_hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`：仅作成本参考，**不能当架构验收依据**。L5 只追加、L1–L4 不变时它会天然很高（M1 实测长会话 0.9986），这恰好会掩盖"前缀其实没被保护"的情况——必须与 `prefix_hit` 分开记。
-   - 前提（必须实测，不得假设）：① DeepSeek 缓存有 **TTL（小时级，不是永久）**，缓存存活期外的"命中率"没有意义；② **跨会话复用要求同一账号 / 同一 key**；③ 压缩轮次单独标注，不计入稳态。
+   - 前提（实测情况，见 `docs/M1-RESULTS.md`）：① **缓存 TTL 已实测 ≥ 13.5 小时**（会话空闲 808 分钟后首个请求仍命中，`cacheRead` 396,544），原"小时级"假设偏保守；② 跨会话复用是否要求同一账号/同一 key **仍未验证**（无法用前缀不同的会话判定）；③ 压缩轮次单独标注，不计入稳态。
 4. **缓存友好性分级**（第 0 节已验证）：`deepseek-flash` 声明 `systemPromptUpdate: 'in-history'` 与 `toolUpdate: 'addition-only'`——提示词变化追加新的 `system/message`、工具只可追加，二者都落在已有历史之后，故前缀不失效；而重写系统节点（第 0 号节点）、删除工具、改工具定义或改顺序，会从首个变化 token 起使复用失效。设计上应优先使用"追加"类手段。
 5. **压缩是唯一允许"打断前缀"的动作**（M0-6）：DSH 默认压缩是 surface 替换，替换点之后缓存必然失效，且插件必须接管其时机与范围（详见 0.1-⑥）。接管后，折叠策略只允许在轮次边界触发，折叠后立刻让后续请求重建可复用前缀；每次折叠都必须在观测层留标记。
+6. **前缀改写是否真的打断缓存，待复核**（M1-4 反常现象）：实测中工具数 62→63（`toolsDigest` 变化）以及"系统节点 0 消失后恢复"两种前缀改动之后，`cacheReadTokens` 仍然远大于 `prefixTokens`（如 495,616 vs 17,957）。若 provider 命中不是严格连续前缀匹配，则规则 4/5 的收益模型需要重写。**在受控实验（只改节点 0 的一段文本、观测层不断）出结果前，不要把"改前缀必失效"当成已证事实。**
 
 ## 3. 核心功能模块
 
@@ -384,12 +390,12 @@ export class MemoryManagerDB {
 
 严格按顺序推进，先验证缓存，后写上层业务。
 
-1. **M0 接口确认**：完成第 0 节六项验证，把结论填回表格。（前五项 v4.1.1 已完成；**第六项压缩接管 v4.1.4 待实跑**）
+1. **M0 接口确认**：完成第 0 节六项验证，把结论填回表格。（前五项 v4.1.1 已完成；第六项接管机制 v4.1.5 已实测）
 2. **M1 验证期**：观测与追加层 + 单空间静态建表 + `systemPrompt.section()` 段注册。（v4.1.3 已实现并端到端验证，见 `docs/M1-RESULTS.md`）
    - **M1-1（先做）**：实跑一次真实模型请求，把 `llm/stream` 收到的 `usage` 分块（规范化 `TokenUsage`）原样落盘，并在结论文档里标注"原始 provider JSON 不可达"。据此确认实际路由（provider/model）、`cacheWriteTokens` 是否为 0，以及命中率分母；`llm/stream` 旁路能看到该块即为通过。
    - **M1-2**：用 `llm/stream` 旁路读取 `usage.cacheReadTokens`，按 `cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)` 逐请求打印命中率。（已完成，但只得到整段口径）
    - **M1-3**：在空数据、多会话状态下验证 L1–L4 前缀的稳态命中率达标。（已完成，但口径同上）
-   - **M1-4（补测，v4.1.4 新增）**：把命中率拆成 `prefix_hit` 与 `whole_hit` 两个数；`prefix_hit` 需要 L1–L4 的 token 长度，用 `ctx.tokenMeter.measure()` 按节点估算，再用 `cacheReadTokens` 反推"命中的前缀 token"。同时实测两条前提：缓存 TTL（隔 N 小时再发一次，看是否仍命中）与跨会话复用是否要求同一账号。**M1-4 不完成，M2 的评测数字不可信。**
+   - **M1-4（v4.1.5 已完成）**：命中率拆成 `prefixHit`（架构指标）与 `wholeHit`（成本参考），实现见 `src/prefix.js`；`prefixTokens = 系统节点 0 + 工具声明`（实测 17,957，工具占 89.8%），`prefixHitTokens = min(prefixTokens, cacheReadTokens)`。TTL 已有实测（空闲 13.5 小时后仍命中）；跨会话同账号复用仍未验证。**同时发现"前缀改写后命中不跌"的反常现象，受控实验待做（见 2 节规则 6）。**
 3. **M2 检索期**：本地向量 + FTS5 trigram 混合检索跑通。
    - **M2-1（先做）**：embedding 可行性实验——在插件的 worker/子进程里加载 `multilingual-e5-small`，输出一条 384 维向量。要记录三件事：onnxruntime 能否在当前 Electron 运行时加载、首次加载耗时、单条 embedding 的 CPU 延迟；同时确认推理期间 Host 主进程不被阻塞（在加载/推理中打日志观察 UI 是否卡顿）。实验不通过就不进入 M2 后续。
    - **M2-2**：混合检索（向量 + FTS5 trigram，含短查询兜底）跑通；用 30–50 条真实记忆和查询做小评测（可对比加前缀 / 不加前缀）。
@@ -398,14 +404,35 @@ export class MemoryManagerDB {
 
 ## 7. 待定问题（尚未决定，不属于已确认设计）
 
-- **压缩接管的具体参数**：折叠阈值、保留尾部轮数、是否改走"新会话 + 摘要种子"而不是原地折叠（M0-6 实跑后决定）。
-- **`prefix_hit` 的计量方法**：用 `tokenMeter` 估算 L1–L4 长度足够，还是需要 provider 侧分段计数（后者拿不到）。
+- **前缀缓存的行为模型待复核**（最高优先）：M1-4 观测到工具数变化、系统节点 0 消失后恢复，`cacheReadTokens` 都不跌。需要受控实验（只改节点 0 一段文本、观测层不断）判定 provider 是否为严格连续前缀匹配；结论会决定规则 4/5 是否仍然成立。
+- **压缩接管的具体参数**：折叠阈值、保留尾部轮数、是否改走"新会话 + 摘要种子"而不是原地折叠（折叠实现尚未开始，M2 之后）。
+- `prefixHit` 的 `prefixTokens` 目前是字符启发式估算（4 字符/token），不是 provider 真值；是否引入更准的 tokenizer 待定。
 - working / recent 两个维度没有过期或衰减策略，长期运行会膨胀。
 - 记忆的删除与遗忘流程（用户主动要求忘记某条）尚未设计。
 - 管理员是常驻会话还是按需拉起，LLM 调用成本如何控制。
 - RRF 之外是否需要加权（时间新近度、维度权重）。
 
 ## 8. 修订记录
+
+**v4.1.4 → v4.1.5（M0-6 接管机制与 M1-4 双轨指标实测，2026-11-22）**
+
+- **M1-4 实现**：新增 `src/prefix.js`，按 DSH 固定启发式（4 字符/token + 固定开销）估算
+  `prefixTokens`（系统节点 0 + 工具声明），并用 `prefixHitTokens = min(prefixTokens, cacheReadTokens)`
+  计算 `prefixHit`；观测记录新增 `prefixHit / prefixTokens / prefixHitTokens / wholeHit / systemTokens / toolTokens`。
+  实测 `prefixTokens ≈ 17,957`，**工具声明占 89.8%**（系统段仅 1,833），这是优化前缀长度的首要目标。
+- **M1-4 实测**：长会话 8 个带双轨字段的请求全部 `prefixHit = 1`，`wholeHit` 0.9955–0.9994。
+  **TTL 实测 ≥ 13.5 小时**（空闲 808 分钟后首请求仍命中 396,544 token），原"小时级 TTL"
+  假设偏保守；跨会话同账号复用仍无法判定（缺少前缀一致的两个会话）。
+- **M0-6 接管机制已实测**：新增 `src/compaction.js` 与 `compactionMode: off | observe` 配置。
+  `observe` 用 `ctx.provide('compaction', …)` 认领 seam，`compactIfNeeded`/`compactNow`
+  只记录并返回 `null`，`compactRegion` 抛未实现；本 profile 无其它实现者，认领成功
+  （`events.jsonl`: `compaction/provider-installed`、`compaction/pressure` 495,613/1,048,576）。
+  **折叠策略仍未实现**，`observe` 期间不发生任何压缩（与接管前一致）。
+- **新增事件日志** `events.jsonl` 与 `history/replace` 侦测（任何 `surfaceOp: replace`
+  都记录），用于把"前缀被重写"的轮次从稳态统计里剔除；实测计数 0。
+- **发现待复核反常现象**：工具数 62→63（`toolsDigest` 变化）与"节点 0 消失后恢复"之后，
+  `cacheReadTokens` 仍远大于 `prefixTokens`（495,616 vs 17,957），与"改前缀必失效"的假设冲突。
+  暂不改架构结论，改为在 §7 列为最高优先待复核项，并写明受控实验设计。
 
 **v4.1.3 → v4.1.4（压缩前提、L5 语义、双轨指标、身份注入，2026-11-22）**
 

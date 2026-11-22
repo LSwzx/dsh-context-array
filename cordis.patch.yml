@@ -8,3 +8,5 @@
         spaceRules: 'Shared workspace facts stay in this space unless a more specific space is bound.'
         observeUsage: true
         bootstrapMessages: true
+        compactionMode: observe   # off | observe; observe claims ctx.compaction but NEVER folds (M0-6 verification)
+        compactionWarnTokens: 300000

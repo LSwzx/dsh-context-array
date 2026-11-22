@@ -19,6 +19,12 @@ export const DEFAULT_SPACE_RULES =
 /** `<home>/.dsh/context-array`, used when `dataDir` is empty. */
 export const DEFAULT_DATA_DIR = path.join(os.homedir(), '.dsh', 'context-array');
 
+/** How compaction is handled: `off` leaves the deployment alone, `observe` claims the seam but never folds. */
+export const COMPACTION_MODES = Object.freeze(['off', 'observe']);
+
+/** Default pressure at which `observe` mode records a sample (tokens). */
+export const DEFAULT_COMPACTION_WARN_TOKENS = 400_000;
+
 /**
  * Return `value` when it is a non-blank string, otherwise `fallback`.
  *
@@ -50,9 +56,11 @@ function booleanOr(value, fallback) {
  *
  * @param {unknown} raw Loader row config object; may be undefined or partial.
  * @returns {Readonly<{
- *   dataDir: string, dbPath: string, usageLogPath: string,
+ *   dataDir: string, dbPath: string, usageLogPath: string, eventsLogPath: string,
  *   spaceId: string, spaceName: string, spaceRules: string,
- *   observeUsage: boolean, bootstrapMessages: boolean, schemaVersion: number,
+ *   observeUsage: boolean, bootstrapMessages: boolean,
+ *   compactionMode: string, compactionWarnTokens: number,
+ *   schemaVersion: number,
  * }>}
  */
 export function resolveConfig(raw) {
@@ -68,11 +76,20 @@ export function resolveConfig(raw) {
     dataDir,
     dbPath: path.join(dataDir, 'context-array.db'),
     usageLogPath: path.join(dataDir, 'usage.jsonl'),
+    eventsLogPath: path.join(dataDir, 'events.jsonl'),
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),
     observeUsage: booleanOr(input.observeUsage, true),
     bootstrapMessages: booleanOr(input.bootstrapMessages, true),
+    compactionMode:
+      typeof input.compactionMode === 'string' && COMPACTION_MODES.includes(input.compactionMode)
+        ? input.compactionMode
+        : 'off',
+    compactionWarnTokens:
+      Number.isSafeInteger(input.compactionWarnTokens) && input.compactionWarnTokens > 0
+        ? input.compactionWarnTokens
+        : DEFAULT_COMPACTION_WARN_TOKENS,
     schemaVersion: SCHEMA_VERSION,
   });
 }

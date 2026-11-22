@@ -33,6 +33,8 @@ import {
 } from './src/prompt.js'
 import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
+import { createEventLog } from './src/events.js'
+import { installCompactionTakeover, installHistoryReplacementWatch } from './src/compaction.js'
 
 export const name = 'dsh-context-array'
 export const inject = ['systemPrompt', 'llm']
@@ -63,6 +65,22 @@ export function apply(ctx, rawConfig = {}) {
     })
     ctx.on('llm/stream', observer.wrapStream)
   }
+
+  // M1-4: record every history replacement (compaction, tool-result pruning),
+  // so the usage log can tell steady state from "the prefix was just rewritten".
+  const events = createEventLog({ logPath: config.eventsLogPath, onError: warn('events') })
+  installHistoryReplacementWatch({ ctx, events, warn: warn('history-replace') })
+
+  // M0-6: claim the compaction seam when asked to. `off` leaves the deployment
+  // untouched; `observe` proves the takeover without ever folding history.
+  const takeover = installCompactionTakeover({
+    ctx,
+    config,
+    events,
+    warn: warn('compaction'),
+    now: () => Date.now(),
+  })
+  if (takeover.installed) ctx.logger?.('dsh-context-array')?.info?.('[compaction] seam claimed in observe mode')
 
   // L1 and L3 are global and static, so every session on this deployment shares
   // the same bytes.
