@@ -843,6 +843,29 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(false);
       const [loadError, setLoadError] = React.useState('');
       const [selectedId, setSelectedId] = React.useState('');
+      const [history, setHistory] = React.useState(null);
+      const [historyLoading, setHistoryLoading] = React.useState(false);
+      const [historyError, setHistoryError] = React.useState('');
+
+      async function loadHistory(memoryId) {
+        if (!memoryId) return;
+        setHistoryLoading(true);
+        setHistoryError('');
+        try {
+          const data = await call('/memories/' + encodeURIComponent(memoryId) + '/history');
+          setHistory(data.versions || []);
+        } catch (error) {
+          setHistoryError(error.message);
+          setHistory(null);
+        } finally {
+          setHistoryLoading(false);
+        }
+      }
+
+      React.useEffect(() => {
+        setHistory(null);
+        setHistoryError('');
+      }, [selectedId]);
 
       async function load() {
         if (!space) return;
@@ -966,7 +989,34 @@ window.__ModuleLoader__.load({
                           h('dd', null, formatTime(selected.timestamp)),
                         ),
                         h('button', { className: 'ca-btn is-link', onClick: () => setTab('spaces') }, '查看所属空间'),
+                        h(
+                          'button',
+                          { className: 'ca-btn is-link', disabled: historyLoading, onClick: () => loadHistory(selected.id) },
+                          historyLoading ? '读取历史…' : '历史版本（取代链）',
+                        ),
+                        historyError ? h('div', { className: 'ca-error' }, historyError) : null,
                       ),
+                      history
+                        ? h(
+                            'div',
+                            { className: 'ca-card' },
+                            h('div', { className: 'ca-name' }, '历史版本（' + history.length + '）'),
+                            h(
+                              'div',
+                              { className: 'ca-hint' },
+                              '单链取代：旧版本只在这里供人查阅，memory_search 与 memory_archive 只看到当前有效版本（superseded_by IS NULL），不会把旧记忆喂给模型。',
+                            ),
+                            history.map((version) =>
+                              h(
+                                'div',
+                                { className: 'ca-row', style: { alignItems: 'flex-start' }, key: version.id },
+                                h('span', { className: 'ca-badge ' + (version.current ? 'is-neutral' : 'is-warn') }, version.current ? '当前' : '旧版本'),
+                                h('span', { className: 'ca-muted' }, formatTime(version.timestamp)),
+                                h('div', { className: 'ca-clamp' }, version.content),
+                              ),
+                            ),
+                          )
+                        : null,
                       h(
                         'div',
                         { className: 'ca-card' },
@@ -1070,6 +1120,12 @@ window.__ModuleLoader__.load({
           ),
           h('button', { className: 'ca-btn', disabled: busy, onClick: load }, '刷新'),
           h('span', { className: 'ca-muted' }, '共 ' + (stats.total || 0) + ' 条'),
+          h(
+            'span',
+            { className: 'ca-muted' },
+            '已归档 ' + (stats.done || 0) + ' · 已拒绝 ' + (stats.rejected || 0) + ' · 待审核 ' + (stats.pending || 0) +
+              ((stats.processing || 0) > 0 ? ' · 处理中 ' + stats.processing : ''),
+          ),
           stuckCount > 0 ? h('span', { className: 'ca-badge is-warn' }, stuckCount + ' 条处理中超时') : null,
           failedCount > 0 ? h('span', { className: 'ca-badge is-error' }, failedCount + ' 条失败') : null,
         ),

@@ -190,6 +190,9 @@ export function insertMemory(db, {id?, spaceId, dimension='fact', content, embed
 export function listActiveEmbeddings(db, spaceIds)   // -> [{id, spaceId, dimension, content, vec}]
 export function keywordSearchMode(query)             // -> 'fts' | 'like' | 'skipped'
 export function searchKeyword(db, {spaceIds, query, limit=20})  // -> [{id, spaceId, dimension, content, score}]
+export const TIME_BOUND_DIMENSION_DAYS = 7
+export function activeMemoryPredicate(alias)  // superseded_by IS NULL + recent/working freshness
+export function listMemoryHistory(db, memoryId)  // recursive both-direction supersede chain
 export function countMemories(db)                    // -> { total, active }
 ```
 
@@ -338,6 +341,8 @@ Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionI
 `wakeMaxPerHour`, defaultSpaceId; the session list is the host corpus from
 `ctx.get('sessionQuery').listSessions()` (live + persisted), titled via `readTitleSnapshots()`
 with `sessionTitle.get()` as the live fallback), `POST /spaces/create|/spaces/update|/spaces/delete`,
+`GET /memories/:id/history` (recursive CTE over `superseded_by`, oldest first; 404 when the id is unknown),
+`GET /queue/stats` (`GROUP BY status` counters),
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
 `POST /memories/delete` (always `403 MEMORY_READ_ONLY`: the UI is read-only for memory),
 `POST /bind|/unbind`,

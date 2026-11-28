@@ -34,6 +34,31 @@ export const MEMORY_ERRORS = Object.freeze({
 /** Default `searchKeyword` page size, matching the §3.3 "top 20" of each path. */
 export const DEFAULT_KEYWORD_LIMIT = 20;
 
+/**
+ * Hard-coded freshness window for the two time-bound dimensions.
+ *
+ * `recent` and `working` are only meaningful while they are (nearly) current, so any
+ * row older than this many days is filtered out *in SQL*, before it can reach the
+ * model. This is a code rule, not a prompt rule: the model cannot override it.
+ */
+export const TIME_BOUND_DIMENSION_DAYS = 7;
+
+/** Dimensions subject to the freshness window. */
+const TIME_BOUND_DIMENSIONS = ['recent', 'working'];
+
+/**
+ * SQL predicate for "active and fresh" rows; shared by every retrieval query so the
+ * three paths cannot drift apart.
+ *
+ * @param {string} [alias] table alias without the trailing dot
+ * @returns {string}
+ */
+export function activeMemoryPredicate(alias = '') {
+  const prefix = alias === '' ? '' : `${alias}.`;
+  const timeBound = TIME_BOUND_DIMENSIONS.map((dimension) => `'${dimension}'`).join(', ');
+  return `(${prefix}superseded_by IS NULL AND NOT (${prefix}dimension IN (${timeBound}) AND ${prefix}timestamp < datetime('now', '-${TIME_BOUND_DIMENSION_DAYS} days')))`;
+}
+
 /** A trigram MATCH needs three characters; below that the `LIKE` path takes over. */
 const TRIGRAM_MIN_CHARS = 3;
 
@@ -253,7 +278,7 @@ export function listActiveEmbeddings(db, spaceIds) {
     .prepare(
       `SELECT id, space_id, dimension, content, embedding
          FROM memories
-        WHERE superseded_by IS NULL
+        WHERE ${activeMemoryPredicate()}
           AND embedding IS NOT NULL
           AND space_id IN (${placeholders(ids.length)})
         ORDER BY seq ASC`,
@@ -385,7 +410,7 @@ function searchKeywordFts(db, ids, terms, cap) {
            FROM memories_fts
            JOIN memories ON memories.seq = memories_fts.rowid
           WHERE memories_fts MATCH ?
-            AND memories.superseded_by IS NULL
+            AND ${activeMemoryPredicate('memories')}
             AND memories.space_id IN (${placeholders(ids.length)})
           ORDER BY rank ASC, memories.id ASC
           LIMIT ?`,
@@ -424,7 +449,7 @@ function searchKeywordLike(db, ids, patterns, cap) {
     .prepare(
       `SELECT id, space_id, dimension, content
          FROM memories
-        WHERE superseded_by IS NULL
+        WHERE ${activeMemoryPredicate()}
           AND space_id IN (${placeholders(ids.length)})
           AND (${matches})
         ORDER BY seq ASC, id ASC
@@ -438,6 +463,54 @@ function searchKeywordLike(db, ids, patterns, cap) {
       content: row.content,
       score: 0,
     }));
+}
+
+/**
+ * Full supersede chain for one memory id, for the human-only history view.
+ *
+ * The chain is read with a recursive CTE that walks both directions:
+ *   - forward: `superseded_by` links this row to its replacement;
+ *   - backward: other rows whose `superseded_by` points at this row.
+ * Retrieval never uses this function: `memory_search` stays single-chain and only sees
+ * `superseded_by IS NULL`, so old versions are never fed to the model.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} memoryId any id in the chain
+ * @returns {Array<{ id: string, spaceId: string, dimension: string, content: string,
+ *   supersededBy: string | null, timestamp: string, sourceSessionId: string | null,
+ *   current: boolean }>} oldest first
+ */
+export function listMemoryHistory(db, memoryId) {
+  const id = requireText(memoryId, 'memoryId');
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE version(id) AS (
+         SELECT id FROM memories WHERE id = ?
+         UNION
+         SELECT m.superseded_by FROM memories AS m
+           JOIN version AS v ON m.id = v.id
+          WHERE m.superseded_by IS NOT NULL
+         UNION
+         SELECT m.id FROM memories AS m
+           JOIN version AS v ON m.superseded_by = v.id
+       )
+       SELECT m.id, m.space_id, m.dimension, m.content, m.superseded_by, m.timestamp,
+              m.source_session_id
+         FROM memories AS m
+         JOIN version AS v ON v.id = m.id
+        ORDER BY m.timestamp ASC, m.seq ASC`,
+    )
+    .all(id);
+  return rows.map((row) => ({
+    id: row.id,
+    spaceId: row.space_id,
+    dimension: row.dimension,
+    content: row.content,
+    supersededBy: row.superseded_by ?? null,
+    timestamp: row.timestamp,
+    sourceSessionId: row.source_session_id ?? null,
+    current: row.superseded_by === null,
+  }));
 }
 
 /**

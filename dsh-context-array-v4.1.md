@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.6.4)
+# dsh-context-array 产品需求与技术架构文档 (v4.7.0)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,18 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.6.4 → v4.7.0（检索时效、版本链只读展示、面板统计走 SQL，2026-11-28）**
+
+- 检索 SQL 增加硬编码时效：`recent` / `working` 超过 7 天不进入向量与关键词两条路；
+  `superseded_by IS NULL` 继续作为唯一可见性条件。
+- 新增 `GET /memories/:id/history`：递归 CTE 沿 `superseded_by` 双向遍历，仅供人类面板查阅；
+  工具层保持单链取代，旧版本绝不喂给模型。
+- 面板统计改为 `GET /queue/stats`（SQLite `GROUP BY status`），不解析模型简报；
+  队列页显示已归档/已拒绝/待审核/处理中。
+- 单测 225 项。
+
+**v4.6.3 → v4.6.4（管理员提示词改版：过期、单链取代、原因枚举、单行简报，2026-11-28）**
 
 **v4.6.3 → v4.6.4（管理员提示词改版：过期、单链取代、原因枚举、单行简报，2026-11-28）**
 

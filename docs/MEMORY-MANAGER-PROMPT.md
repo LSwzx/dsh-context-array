@@ -80,6 +80,13 @@ section `context-array:l3-admin`，order 250）。这段文本只由插件注册
 只陈述工具实际返回的结果。
 ```
 
+## 代码侧已强制（与提示词互补）
+
+- `memory_search` 只读到 `superseded_by IS NULL` 且未超过 7 天的 `recent`/`working`：
+  模型即使想引用旧版本也拿不到；`memory_archive` 的取代仍是单链。
+- `memory_queue_settle(status="rejected")` 校验六值原因枚举，非法值返回 `INVALID_REASON`。
+- 面板统计来自 `GET /queue/stats`（SQLite），不依赖 `[Summary]` 简报。
+
 ## 未做的部分（可选后续）
 
 - 简报格式目前只在提示词层约定，代码未解析/校验；若要做统计，可在 `memory_queue_stats` 外再提供一个

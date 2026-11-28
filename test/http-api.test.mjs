@@ -494,3 +494,46 @@ test('the queue endpoint lists items, flags stuck claims, and serves full conten
   assert.equal(badStatus.status, 400)
   assert.equal(badStatus.json.error, 'INVALID_STATUS')
 })
+
+test('the memory history endpoint returns the whole supersede chain', async (t) => {
+  const { route, db } = fixture(t)
+  const insert = db.prepare(
+    'INSERT INTO memories (id, space_id, dimension, content, source_session_id, superseded_by) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+  insert.run('v1', 'space-default', 'fact', '预算 1 万', 's1', 'v2')
+  insert.run('v2', 'space-default', 'fact', '预算 1.2 万', 's1', 'v3')
+  insert.run('v3', 'space-default', 'fact', '预算 1.5 万', 's1', null)
+
+  const response = await request(route, { path: '/api/context-array/memories/v3/history' })
+  assert.equal(response.status, 200)
+  assert.equal(response.json.currentId, 'v3')
+  assert.deepEqual(response.json.versions.map((row) => row.id), ['v1', 'v2', 'v3'])
+  assert.deepEqual(response.json.versions.map((row) => row.current), [false, false, true])
+
+  const middle = await request(route, { path: '/api/context-array/memories/v2/history' })
+  assert.deepEqual(middle.json.versions.map((row) => row.id), ['v1', 'v2', 'v3'])
+
+  const missing = await request(route, { path: '/api/context-array/memories/nope/history' })
+  assert.equal(missing.status, 404)
+  assert.equal(missing.json.error, 'MEMORY_NOT_FOUND')
+})
+
+test('the queue stats endpoint counts rows in SQLite', async (t) => {
+  const { route, db } = fixture(t)
+  const insert = db.prepare(
+    "INSERT INTO memory_queue (id, source_session_id, raw_content, status, dedupe_key) VALUES (?, ?, ?, ?, ?)",
+  )
+  insert.run('q1', 's1', 'a', 'pending', 'k1')
+  insert.run('q2', 's1', 'b', 'done', 'k2')
+  insert.run('q3', 's1', 'c', 'rejected', 'k3')
+  insert.run('q4', 's1', 'd', 'failed', 'k4')
+
+  const response = await request(route, { path: '/api/context-array/queue/stats' })
+  assert.equal(response.status, 200)
+  assert.equal(response.json.stats.pending, 1)
+  assert.equal(response.json.stats.done, 1)
+  assert.equal(response.json.stats.rejected, 1)
+  assert.equal(response.json.stats.failed, 1)
+  assert.equal(response.json.stats.processing, 0)
+  assert.equal(response.json.stats.total, 4)
+})

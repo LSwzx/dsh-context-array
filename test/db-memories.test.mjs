@@ -21,6 +21,7 @@ import {
   insertMemory,
   keywordSearchMode,
   listActiveEmbeddings,
+  listMemoryHistory,
   normalizeSpaceIds,
   searchKeyword,
   toBlob,
@@ -373,3 +374,49 @@ test('normalizeSpaceIds accepts the shapes callers actually pass', () => {
   assert.deepEqual(normalizeSpaceIds(['a', '', 42, null]), ['a']);
   assert.deepEqual(normalizeSpaceIds(7), []);
 });
+
+test('time-bound dimensions older than seven days are filtered in SQL', (t) => {
+  const { db } = tempStore(t)
+  add(db, 'recent-new', '新的近期计划：明天交报告', { dimension: 'recent' })
+  add(db, 'recent-old', '旧的近期计划：上周已经过期的事', { dimension: 'recent' })
+  add(db, 'working-old', '旧的工作状态：正在等旧订单', { dimension: 'working' })
+  add(db, 'fact-old', '去年确定的事实：用户住在北京', { dimension: 'fact' })
+  db.prepare("UPDATE memories SET timestamp = datetime('now', '-8 days') WHERE id IN ('recent-old','working-old','fact-old')").run()
+
+  const hits = searchKeyword(db, { spaceIds: [SPACE], query: '近期计划' }).map((row) => row.id)
+  assert.deepEqual(hits, ['recent-new'], 'expired recent rows never reach retrieval')
+
+  const working = searchKeyword(db, { spaceIds: [SPACE], query: '工作状态' }).map((row) => row.id)
+  assert.deepEqual(working, [], 'expired working rows never reach retrieval')
+
+  const facts = searchKeyword(db, { spaceIds: [SPACE], query: '确定的事实' }).map((row) => row.id)
+  assert.deepEqual(facts, ['fact-old'], 'fact rows are not time-bound')
+
+  const vectors = listActiveEmbeddings(db, [SPACE]).map((row) => row.id)
+  assert.ok(!vectors.includes('recent-old') && !vectors.includes('working-old'))
+})
+
+test('listMemoryHistory walks the single supersede chain oldest first', (t) => {
+  const { db } = tempStore(t)
+  add(db, 'v1', '用户预算为 1 万', { dimension: 'fact' })
+  add(db, 'v2', '用户预算为 1.2 万', { dimension: 'fact', supersedesId: 'v1' })
+  add(db, 'v3', '用户预算为 1.5 万', { dimension: 'fact', supersedesId: 'v2' })
+
+  const history = listMemoryHistory(db, 'v3')
+  assert.deepEqual(history.map((row) => row.id), ['v1', 'v2', 'v3'])
+  assert.deepEqual(history.map((row) => row.current), [false, false, true])
+  assert.equal(history[2].supersededBy, null)
+  assert.equal(history[1].supersededBy, 'v3')
+
+  // Asking from the middle still returns the whole chain.
+  assert.deepEqual(listMemoryHistory(db, 'v2').map((row) => row.id), ['v1', 'v2', 'v3'])
+  assert.deepEqual(listMemoryHistory(db, 'missing'), [])
+})
+
+test('retrieval never sees superseded rows even when the chain exists', (t) => {
+  const { db } = tempStore(t)
+  add(db, 'a', '用户喜欢深色主题', { dimension: 'fact' })
+  add(db, 'b', '用户喜欢浅色主题', { dimension: 'fact', supersedesId: 'a' })
+  const ids = searchKeyword(db, { spaceIds: [SPACE], query: '用户喜欢' }).map((row) => row.id)
+  assert.deepEqual(ids, ['b'])
+})

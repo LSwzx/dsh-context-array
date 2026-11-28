@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.4 (2026-11-28)
+
+- 边界明确：不再解析模型简报；面板统计直接查 SQLite（`GET /queue/stats`，`GROUP BY status`）。
+- 检索 SQL 统一谓词：`superseded_by IS NULL` 且 `recent`/`working` 超过 7 天自动过滤（硬编码，模型不可覆盖）。
+- 新增 `GET /memories/:id/history`：递归 CTE 沿 `superseded_by` 双向取整条取代链，供面板「历史版本」查看；
+  旧版本永不进入 `memory_search` / `memory_archive`，底层仍是单链取代。
+- 面板：记忆详情新增「历史版本（取代链）」；队列页显示已归档/已拒绝/待审核/处理中统计。
+- 单测 225 项（7 天过滤、取代链、历史 API、队列统计）。
+
 ## 1.0.3 (2026-11-28)
 
 - 记忆管理员提示词改版：`recent` 明显过期时拒稿 `EXPIRED`；冲突取代只填**最新一条**旧记忆

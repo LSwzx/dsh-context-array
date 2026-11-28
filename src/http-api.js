@@ -14,6 +14,7 @@ import {
   sendInbox,
 } from './inbox.js'
 import { getQueueItem, listQueueItems, queueStats, QUEUE_STATUSES } from './queue.js'
+import { listMemoryHistory } from './db-memories.js'
 import { getPersonaProfile, setPersonaProfile } from './db.js'
 import {
   getEffectivePersona,
@@ -331,8 +332,21 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
           const result = deleteSpace(db, String(body.id ?? ''), { defaultSpaceId: config.spaceId })
           return json(res, result.deleted ? 200 : 409, result.deleted ? result : { ...result, error: result.reason })
         }
-        if (method === 'GET' && path === '/memories') {
-          const spaceId = url.searchParams.get('spaceId') ?? ''
+        const historyMatch = path.match(/^\/memories\/([^/]+)\/history$/)
+        if (method === 'GET' && historyMatch !== null) {
+          const memoryId = decodeURIComponent(historyMatch[1])
+          const versions = listMemoryHistory(db, memoryId)
+          if (versions.length === 0) return json(res, 404, { error: 'MEMORY_NOT_FOUND', memoryId, versions: [] })
+          return json(res, 200, {
+            memoryId,
+            currentId: versions.find((version) => version.current)?.id ?? null,
+            versions,
+          })
+        }
+        if (method === 'GET' && path === '/queue/stats') {
+          return json(res, 200, { stats: queueStats(db) })
+        }
+        if (method === 'GET' && path === '/memories') {          const spaceId = url.searchParams.get('spaceId') ?? ''
           if (spaceId === '') return json(res, 400, { error: 'SPACE_ID_REQUIRED', memories: [], total: 0 })
           const dimension = url.searchParams.get('dimension') || undefined
           if (dimension !== undefined && !MEMORY_DIMENSIONS.includes(dimension)) {
