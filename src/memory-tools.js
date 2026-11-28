@@ -137,7 +137,7 @@ export function sessionBinding(db, sessionId, fallbackSpaceId = '') {
  * @param {(error: unknown) => void} [input.warn]
  * @returns {object[]} tool definitions
  */
-export function createMemoryTools({ db, embedPassage = null, config = {}, warn = () => {}, ctx = null }) {
+export function createMemoryTools({ db, embedPassage = null, config = {}, warn = () => {}, ctx = null, inboxTracker = null }) {
   const adminIds = new Set(Array.isArray(config.adminSessionIds) ? config.adminSessionIds : [])
   const staleMinutes = config.queueStaleMinutes ?? 10
   const maxRetries = config.queueMaxRetries ?? 3
@@ -490,20 +490,51 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         const targetSessionId = String(args?.targetSessionId ?? '').trim()
         const content = String(args?.content ?? '').trim()
         if (!sessionId || targetSessionId === '' || content === '') return { error: 'TARGET_AND_CONTENT_REQUIRED' }
+
+        // Design §3.4: a message produced inside an inbox-triggered turn inherits
+        // hop+1, and the chain stops at MAX_HOP_COUNT. The trigger comes from the host's
+        // own `agent/inbox/claimed`, never from tool arguments.
+        const hopInfo = inboxTracker ? inboxTracker.nextHop(sessionId) : { hop: 0, triggerMsgId: null }
+        if (hopInfo === null) return { error: 'HOP_LIMIT' }
+
+        let wake = args?.wake === true
+        let forcedQueued = false
+        if (wake && inboxTracker && !inboxTracker.consumeWake(sessionId)) {
+          // One wake per source per turn; over budget downgrades to a queued inject.
+          wake = false
+          forcedQueued = true
+        }
+
         const spaceId = spacesOf(sessionId)[0] ?? config.spaceId
-        const inbox = sendInbox(db, { spaceId, sourceSessionId: sessionId, targetSessionId, content })
+        const inbox = sendInbox(db, {
+          spaceId,
+          sourceSessionId: sessionId,
+          targetSessionId,
+          content,
+          hopCount: hopInfo.hop,
+          triggerMsgId: hopInfo.triggerMsgId,
+        })
         const delivery = deliverInbox(ctx, {
           db,
           targetSessionId,
           content,
-          wake: args?.wake === true,
+          wake,
           maxPerHour: wakeMaxPerHour,
           globalMaxPerHour: config.wakeGlobalMaxPerHour ?? 30,
           cooldownMinutes: config.wakeCooldownMinutes ?? 10,
           inboxId: inbox.id,
           sourceSessionId: sessionId,
+          tracker: inboxTracker,
+          hop: hopInfo.hop,
         })
-        return { inboxId: inbox.id, deduped: inbox.deduped, targetSessionId, delivery: delivery.mode }
+        return {
+          inboxId: inbox.id,
+          deduped: inbox.deduped,
+          targetSessionId,
+          hop: hopInfo.hop,
+          delivery: forcedQueued ? 'throttled' : delivery.mode,
+          ...(forcedQueued ? { reason: 'per-source-turn' } : {}),
+        }
       },
     },
 
@@ -536,11 +567,15 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         const sessionId = exec?.agent?.id
         if (!sessionId) return { messages: [] }
         const status = String(args?.status ?? 'pending')
+        const binding = sessionBinding(db, sessionId, config.spaceId)
+        // Design §3.4 visibility: a main/admin session reads every message inside its
+        // bound spaces; a sub session only messages addressed to itself.
+        const canReadSpace = binding.role === 'main' || binding.role === 'admin'
         return {
           // `'all'` must reach listInbox as-is: passing undefined would fall back to its
           // default `'pending'` and silently hide read messages.
           messages: listInbox(db, {
-            targetSessionId: sessionId,
+            ...(canReadSpace ? { spaceIds: binding.spaceIds } : { targetSessionId: sessionId }),
             status,
             limit: args?.limit,
           }),

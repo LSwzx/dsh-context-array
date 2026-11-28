@@ -49,6 +49,7 @@ import { createRetriever } from './src/retrieval.js'
 import { createMemorySearchTool } from './src/memory-tool.js'
 import { createContextCompactTool } from './src/compact-tool.js'
 import { createMemoryTools } from './src/memory-tools.js'
+import { createInboxTracker } from './src/inbox-tracker.js'
 import { registerContextArrayApi } from './src/http-api.js'
 
 export const name = 'dsh-context-array'
@@ -138,6 +139,7 @@ export function apply(ctx, rawConfig = {}) {
       config,
       warn: warn('memory-tools'),
       ctx,
+      inboxTracker,
     })) {
       ctx.tools.register(tool)
     }
@@ -151,6 +153,13 @@ export function apply(ctx, rawConfig = {}) {
   const personaGuard = createPersonaGuard({ config, events, warn: warn('persona-guard') })
   ctx.on('tools/post-execute', (exec, result, next) => personaGuard.handle(exec, result, next))
 
+  // Inbox hop tracking: `agent/inbox/claimed` proves a delivered message started the
+  // current turn, `agent/turn-stopping` closes it. Used for hop_count and the one-wake
+  // per source per turn rule.
+  const inboxTracker = createInboxTracker({ db: store.db, warn: warn('inbox-tracker') })
+  ctx.on('agent/inbox/claimed', (payload) => inboxTracker.onClaimed(payload))
+  ctx.on('agent/turn-stopping', (payload) => inboxTracker.onTurnStopping(payload))
+
   // M4: the sidebar panel's Host API. Optional: deployments without a web server
   // simply never expose the panel's data.
   try {
@@ -160,6 +169,7 @@ export function apply(ctx, rawConfig = {}) {
       config,
       warn: warn('http-api'),
       events,
+      inboxTracker,
       persona: {
         mode: personaGuard.mode,
         tools: personaGuard.tools,

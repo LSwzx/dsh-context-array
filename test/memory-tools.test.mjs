@@ -12,6 +12,8 @@ import { test } from 'node:test'
 
 import { resolveConfig } from '../src/config.js'
 import { bindSessionSpaces, ensureDefaultSpace, openStore } from '../src/db.js'
+import { createInboxTracker } from '../src/inbox-tracker.js'
+import { sendInbox } from '../src/inbox.js'
 import { createMemoryTools, sessionBinding } from '../src/memory-tools.js'
 
 const MAIN = 'session-main'
@@ -257,4 +259,62 @@ test('inbox tools queue for another session and read own messages', async (t) =>
   const acked = await byName.inbox_ack.execute({ inboxId: listed.messages[0].id }, asAdmin)
   assert.equal(acked.acknowledged, true)
   assert.equal((await byName.inbox_list.execute({}, asAdmin)).messages.length, 0)
+})
+
+test('hop ceiling, per-turn wake budget and inbox visibility follow the design', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-tools-'))
+  const resolved = resolveConfig({ dataDir, spaceId: SPACE })
+  const opened = openStore(resolved)
+  ensureDefaultSpace(opened.db, resolved)
+  bindSessionSpaces(opened.db, MAIN, [SPACE], 'main')
+  bindSessionSpaces(opened.db, ADMIN, [SPACE], 'admin')
+  bindSessionSpaces(opened.db, 'session-sub', [SPACE], 'sub')
+  t.after(() => {
+    opened.close()
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  })
+
+  const calls = { inject: 0, followup: 0 }
+  const targetAgent = {
+    id: 'target',
+    inject() {
+      calls.inject += 1
+    },
+    followup() {
+      calls.followup += 1
+    },
+  }
+  const ctx = { get: (name) => (name === 'agents' ? { get: (id) => (id === 'target' ? targetAgent : undefined) } : undefined) }
+  const tracker = createInboxTracker({ db: opened.db })
+  const tools = createMemoryTools({ db: opened.db, embedPassage: null, config: {}, ctx, inboxTracker: tracker })
+  const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
+
+  // --- hop ceiling: a sender already at hop 3 cannot forward -------------
+  const seed = sendInbox(opened.db, { spaceId: SPACE, sourceSessionId: 's0', targetSessionId: MAIN, content: 'seed' })
+  tracker.noteDelivery({ targetSessionId: MAIN, inboxId: seed.id, hop: 3, content: 'seed' })
+  tracker.onClaimed({ agent: { id: MAIN }, message: { role: 'user', content: [{ type: 'text', text: 'seed' }] }, turn: 1 })
+  const refused = await byName.inbox_send.execute({ targetSessionId: 'target', content: 'forward' }, asMain)
+  assert.equal(refused.error, 'HOP_LIMIT')
+
+  // A sender inside an inbox-triggered turn forwards with hop 1 and gets a wake; a
+  // second wake in the same turn is downgraded to a queued inject.
+  tracker.onTurnStopping({ agent: { id: MAIN } })
+  const trigger = sendInbox(opened.db, { spaceId: SPACE, sourceSessionId: 's0', targetSessionId: MAIN, content: 'trigger' })
+  tracker.noteDelivery({ targetSessionId: MAIN, inboxId: trigger.id, hop: 0, content: 'trigger' })
+  tracker.onClaimed({ agent: { id: MAIN }, message: { role: 'user', content: [{ type: 'text', text: 'trigger' }] }, turn: 2 })
+  const first = await byName.inbox_send.execute({ targetSessionId: 'target', content: 'one', wake: true }, asMain)
+  assert.equal(first.delivery, 'woke')
+  assert.equal(first.hop, 1)
+  const second = await byName.inbox_send.execute({ targetSessionId: 'target', content: 'two', wake: true }, asMain)
+  assert.equal(second.delivery, 'throttled')
+  assert.equal(second.reason, 'per-source-turn')
+  assert.equal(calls.followup, 1, 'only one wake for the source in this turn')
+
+  // --- visibility: main reads messages in bound spaces, sub only its own --
+  sendInbox(opened.db, { spaceId: SPACE, sourceSessionId: 'other', targetSessionId: 'someone-else', content: 'broadcast' })
+  const mainMessages = await byName.inbox_list.execute({ status: 'all' }, asMain)
+  assert.ok(mainMessages.messages.some((row) => row.content === 'broadcast'), 'main reads its space messages')
+
+  const subMessages = await byName.inbox_list.execute({ status: 'all' }, { agent: { id: 'session-sub' } })
+  assert.equal(subMessages.messages.some((row) => row.content === 'broadcast'), false, 'sub does not read other targets')
 })

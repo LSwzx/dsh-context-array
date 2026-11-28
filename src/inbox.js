@@ -38,7 +38,10 @@ export function inboxDedupeKey(content, now = new Date()) {
  *
  * @returns {{ id: string, deduped: boolean }}
  */
-export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, content, now = new Date() }) {
+export function sendInbox(
+  db,
+  { spaceId, sourceSessionId, targetSessionId, content, now = new Date(), hopCount = 0, triggerMsgId = null },
+) {
   const id = crypto.randomUUID()
   const dedupe = inboxDedupeKey(content, now)
   const existing = db
@@ -50,20 +53,24 @@ export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, conte
   if (existing) return { id: existing.id, deduped: true }
 
   db.prepare(
-    `INSERT INTO inbox (id, space_id, source_session_id, target_session_id, content, dedupe_key, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-  ).run(id, spaceId, sourceSessionId, targetSessionId, String(content), dedupe)
+    `INSERT INTO inbox (id, space_id, source_session_id, target_session_id, content, dedupe_key, hop_count, trigger_msg_id, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+  ).run(id, spaceId, sourceSessionId, targetSessionId, String(content), dedupe, hopCount, triggerMsgId)
   return { id, deduped: false }
 }
 
 /** Inbox rows for one target (or all targets when omitted), newest first. */
-export function listInbox(db, { targetSessionId, status = 'pending', limit = 50 } = {}) {
+export function listInbox(db, { targetSessionId, spaceIds, status = 'pending', limit = 50 } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200)
   const conditions = []
   const params = []
   if (targetSessionId) {
     conditions.push('i.target_session_id = ?')
     params.push(targetSessionId)
+  }
+  if (Array.isArray(spaceIds) && spaceIds.length > 0) {
+    conditions.push(`i.space_id IN (${spaceIds.map(() => '?').join(',')})`)
+    params.push(...spaceIds)
   }
   if (status && status !== 'all') {
     conditions.push('i.status = ?')
@@ -156,12 +163,22 @@ export function deliverInbox(ctx, request) {
     maxPerHour = DEFAULT_WAKE_MAX_PER_HOUR,
     globalMaxPerHour = DEFAULT_WAKE_GLOBAL_MAX_PER_HOUR,
     cooldownMinutes = DEFAULT_WAKE_COOLDOWN_MINUTES,
+    tracker = null,
+    hop = 0,
     now = () => Date.now(),
   } = request
   const db = request.db
   const agents = ctx?.get?.('agents')
   const agent = agents?.get?.(targetSessionId)
   if (!agent) return { mode: 'offline', targetSessionId }
+
+  const note = () => {
+    try {
+      tracker?.noteDelivery({ targetSessionId, inboxId: request.inboxId, hop, content })
+    } catch {
+      // Tracking is observability, never a delivery precondition.
+    }
+  }
 
   const message = inboxMessage(content)
   const canInject = typeof agent.inject === 'function'
@@ -170,6 +187,7 @@ export function deliverInbox(ctx, request) {
   if (!wake) {
     if (!canInject) return { mode: 'offline', targetSessionId }
     agent.inject(message)
+    note()
     return { mode: 'queued', targetSessionId }
   }
 
@@ -182,7 +200,10 @@ export function deliverInbox(ctx, request) {
         throttled: true,
       })
     }
-    if (canInject) agent.inject(message)
+    if (canInject) {
+      agent.inject(message)
+      note()
+    }
     return { mode: 'throttled', reason, targetSessionId }
   }
 
@@ -198,10 +219,14 @@ export function deliverInbox(ctx, request) {
   }
 
   if (!canWake) {
-    if (canInject) agent.inject(message)
+    if (canInject) {
+      agent.inject(message)
+      note()
+    }
     return { mode: 'queued', targetSessionId }
   }
   agent.followup(message)
+  note()
   if (db) {
     noteWake(db, {
       targetSessionId,

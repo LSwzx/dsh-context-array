@@ -34,6 +34,7 @@ GET  /api/context-array/overview → spaces=1, bindings=13, sessions=13
 ```
 
 `bindings=13` 是 M1 以来真实会话累积的绑定，说明面板读的是真实存储而不是演示数据。
+> 注：v4.3.2 起已取消自动绑定，未绑定会话改用隐式默认空间，因此该数字不再成立（属历史记录）。
 
 ### 3. 写接口守卫（单测）
 

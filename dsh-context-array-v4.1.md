@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.4.1)
+# dsh-context-array 产品需求与技术架构文档 (v4.4.2)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -100,7 +100,7 @@
 9. **压缩必须先定归属**（M0-6）：要么禁用默认实现并接管，要么显式接受"自动折叠会打断缓存"。未定之前不进入 M2——这一条不成立，L1–L5 的前提在第一次自动压缩时就作废。
 10. **指标双轨**：`prefix_hit = 命中的 L1–L4 token / L1–L4 总长`（架构指标，目标 ≥ 95%）与 `whole_hit = cacheReadTokens / (inputTokens + cacheReadTokens + cacheWriteTokens)`（成本参考）。只报整段命中率是假数据：L5 每轮追加、L1–L4 不变时整段命中天然很高，掩盖前缀没被保护的情况。
 11. **缓存前提的实测状态**：TTL 已实测 **≥ 13.5 小时**（空闲 808 分钟后仍命中）；**跨会话是否要求同账号/同 key 仍未验证**。两条都写进验收记录，不靠假设。
-12. **身份与归属只由宿主注入**：`check_inbox` 等工具的调用者身份取 `exec.agent.id`（宿主执行上下文），`space` 归属由后端按该 `session_id` 查绑定表；**`session_id` / `space_id` 绝不作为工具参数**，否则一次提示注入即可越权读别人的留言。
+12. **身份与归属只由宿主注入**：`inbox_list` 等工具的调用者身份取 `exec.agent.id`（宿主执行上下文），`space` 归属由后端按该 `session_id` 查绑定表；**`session_id` / `space_id` 绝不作为工具参数**，否则一次提示注入即可越权读别人的留言。
 13. **并发写 SQLite 必须** `PRAGMA journal_mode = WAL` + `PRAGMA busy_timeout`（现实现为 5000ms，见 `src/db.js`），否则多会话并发写会随机 `SQLITE_BUSY`。
 
 ## 1. 项目概述
@@ -216,7 +216,7 @@
   - **跳数**：hop_count 由后端强制维护。判定"本轮由哪条留言触发"：插件投递时自建 `UserMessage`（自定义 id + `source: { kind: 'agent-message', senderSessionId }`），并记录 `message_id ↔ inbox.id`；监听 `agent/inbox/claimed`（payload `{ agent, message, turn }`）或读取 `agent/pre-step` 的批次，即可得知该轮实际消费了哪些 agent 来源的消息，把这些 inbox 行记为该轮触发器。会话在**同一轮**内发出的新留言继承第一个触发器的 hop_count + 1 并写 trigger_msg_id；模型不得填写；超过 3 直接拒绝。
   - **唤醒限流**：唤醒 = 开新轮 = 计费，必须设冷却与上限：同一 `target_session_id` 两次主动唤醒的最小间隔（默认 10 分钟）；同一 `source_session_id` 每轮最多唤醒 1 个目标；全局每小时主动唤醒次数上限（默认 10，可配置）。超限时**降级为排队（inject）**而不丢弃，并记 `throttled` 供排查。
   - **去重**：dedupe_key = hash(内容) + 小时桶（YYYYMMDDHH），同源同内容同一小时内只保留一条，之后可再次发送。
-- **权限（身份由宿主注入，绝不来自工具参数）**：`check_inbox` 的调用者身份取宿主执行上下文里的 `exec.agent.id`（工具拿到的 `ToolExecution.agent`），**不是工具参数**——模型无法填别人的 session id，一次提示注入也穿不了；空间归属由后端按该 `session_id` 查 `session_space_links` 得到，`space_id` 同样不接受模型指定。判定规则：主会话可读其所绑定空间内的全部留言；子会话只能读定向给自己的；任何会话都不能读未绑定空间的留言。
+- **权限（身份由宿主注入，绝不来自工具参数）**：`inbox_list` 的调用者身份取宿主执行上下文里的 `exec.agent.id`（工具拿到的 `ToolExecution.agent`），**不是工具参数**——模型无法填别人的 session id，一次提示注入也穿不了；空间归属由后端按该 `session_id` 查 `session_space_links` 得到，`space_id` 同样不接受模型指定。判定规则：主会话可读其所绑定空间内的全部留言；子会话只能读定向给自己的；任何会话都不能读未绑定空间的留言。
 - **并发写**：多会话同时写库，连接必须 `PRAGMA journal_mode = WAL` + `PRAGMA busy_timeout = 5000`（见 4 节），否则 `SQLITE_BUSY` 会随机炸。
 - **v4.3.0 实现与实测**（`src/inbox.js`、`src/spaces.js`、`src/http-api.js`、`client.js`，详见 `docs/M4-RESULTS.md`）：
   - 已实现：排队 = `agent.inject({content, source:{kind:'context-array-inbox'}})`；唤醒 = `agent.followup(...)`；
@@ -511,6 +511,20 @@ export class MemoryManagerDB {
 
 ## 8. 修订记录
 
+**v4.4.1 → v4.4.2（补齐 hop_count / 每源每轮唤醒 / 留言空间可见性 + 文档口径清理，2026-11-28）**
+
+- **hop_count 真实接线**：新增 `src/inbox-tracker.js`，用宿主事件归因——投递时记录（target、inboxId、hop、内容），
+  `agent/inbox/claimed` 命中后把该行置 `read` 并记为发送方的"当前触发"；`agent/turn-stopping` 关闭触发。
+  轮内发出的新留言 `hop = 触发 hop + 1`，超过 `MAX_HOP_COUNT=3` 直接拒绝（`HOP_LIMIT`），不再永远为 0。
+- **每源每轮唤醒上限**：同一触发轮内，一个来源最多唤醒 1 个目标；超出降级为排队（`reason: per-source-turn`）。
+- **留言空间可见性**：主会话/管理员可读其绑定空间内的全部留言（`listInbox({ spaceIds })`），子会话只读定向给自己的。
+- **文档口径清理**：CONTRACT 的依赖说明、`schemaVersion`、`COMPACTION_MODES`、memory-tools 工具清单、
+  `styles` 注入方式、配置默认值（400000/0.8/off，patch 覆盖为 fold）；README 的测试数（195）、`prefixDigest`
+  结论适用范围；`inbox_list` → `inbox_list`。
+- 单测 195 项全绿（新增 3 项 tracker + 1 项工具链路）。
+
+**v4.4.0 → v4.4.1（修复评审 P0/P1 与面板 404，2026-11-28）**
+
 **v4.4.0 → v4.4.1（修复评审 P0/P1 与面板 404，2026-11-28）**
 
 - **P0-0 面板 404**：API 路由改为 `ctx.inject(['webServer'], …)` 注册（不再依赖激活瞬间的
@@ -707,7 +721,7 @@ export class MemoryManagerDB {
 - **新增 M0 第六项：压缩接管**（0.1-⑥）。DSH 默认压缩是 surface 原地替换（`surfaceOp: replace`），替换点之后缓存失效且插件无感知；`ctx.compaction` 是可替换的能力 seam（`ctx.provide('compaction', …)`），默认实现 `dsh-compaction-basic` 可用 patch 行 `disabled: true` 关闭；本 profile 当前 `compaction-basic` 与 `tool-result-pruner` 均 inactive，故 M1 实测没有压缩样本。明确"纯追加压缩"不可行（不替换就无法缩减 token），只能决定"在哪一刻付一次全价"，并列出接管方案与四个待实跑确认点。**该项未验证前不进入 M2。**
 - **L5 语义重写**（第 2 节 L5 行与规则 2）：取消"记忆快照"与"在新会话或压缩点重建快照"。L5 只放两类内容——会话固定快照（首条追加、写入一次、整会话不变）与每轮按需 top-k 的 `<memory>` 块。全量快照每轮追加会线性膨胀且语义含糊（既非快照也非流水）；检索结果天然不重复，不需要"重建"概念。
 - **验收标准改双轨**（规则 3）：`prefix_hit = 命中的 L1–L4 token / L1–L4 总长`（架构指标，目标 ≥ 95%）与 `whole_hit`（成本参考）。只报整段命中率是假数据——L5 每轮追加、L1–L4 不变时它天然很高，会掩盖前缀未被保护。同时把两条前提写进验收：缓存 TTL 是小时级非永久；跨会话复用要求同一账号/同一 key，均需实测。M1 已发布的数字标注为整段口径。
-- **身份与归属只由宿主注入**（3.4）：`check_inbox` 等的调用者身份取 `exec.agent.id`，`space` 归属由后端按 `session_id` 查表，`session_id`/`space_id` 一律不作为工具参数，避免一次提示注入即越权。
+- **身份与归属只由宿主注入**（3.4）：`inbox_list` 等的调用者身份取 `exec.agent.id`，`space` 归属由后端按 `session_id` 查表，`session_id`/`space_id` 一律不作为工具参数，避免一次提示注入即越权。
 - **并发写**：§4 建表脚本前置 `PRAGMA journal_mode = WAL` + `PRAGMA busy_timeout = 5000`，3.4 同步说明；`src/db.js` 实现已包含。
 - **里程碑**：M0 由五项改六项；M1 新增 **M1-4 补测**（拆双轨指标 + 实测 TTL 与同账号前提），并注明"M1-4 不完成，M2 的评测数字不可信"。§7 新增两条待定（压缩接管参数、`prefix_hit` 计量方法）。
 

@@ -49,9 +49,9 @@
 | 手动压缩工具 | `src/compact-tool.js` | `context_compact()`：只在 `fold` 模式注册，只能折叠调用者自己的会话（身份取宿主注入的 `exec.agent.id`）。 |
 | 本地 embedding | `src/embedding/client.js`、`src/embedding/worker.js` | worker 线程加载 `multilingual-e5-small`（384 维，q8 ONNX），主线程只做 async RPC；首次加载约 1.7 s，单条推理中位 12.5 ms，60 条排队时主线程定时器漂移中位 3 ms。 |
 | 混合检索 | `src/db-memories.js`、`src/retrieval.js` | 向量 top-20（点积=余弦）+ FTS5 trigram top-20（短查询 LIKE 兜底），RRF 融合（默认权重 **2:1**），按 token 预算截断，输出 `<memory>` 块；embedding 不可用时自动降级为关键词路。 |
-| 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`，模型不能指定 session/space。 |
+| 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`（未绑定时用默认空间兜底），模型不能指定 session/space。 |
 | 记忆管理员 | `src/queue.js`、`src/memory-tools.js`、`src/prompt.js` | `memory_propose` 任何会话只入队；`memory_queue_claim` / `memory_archive` / `memory_queue_settle` / `memory_queue_stats` 仅管理员。队列原子领取、过期接管、重试上限、小时桶去重；归档本地算 embedding、校验绑定空间、取代失败整体回滚；管理员会话额外注入防注入 L3 段。 |
-| 留言箱与多空间 | `src/inbox.js`、`src/spaces.js`、`src/http-api.js` | `inbox_send(wake?)` 排队走 `agent.inject`（不唤醒），唤醒走 `agent.followup` 并受每小时 10 次限流（超限降级排队）；工具 `memory_bind` / `memory_unbind` / `inbox_list` / `inbox_ack`。空间增删改查、绑定、记忆浏览/删除经 `/api/context-array`（读 loopback-only，写需 `x-context-array-ui: 1`）。 |
+| 留言箱与多空间 | `src/inbox.js`、`src/spaces.js`、`src/http-api.js` | `inbox_send(wake?)` 排队走 `agent.inject`（不唤醒），唤醒走 `agent.followup` 并受每小时 10 次限流 + 每目标 10 分钟冷却 + 全局每小时 30 次（超限降级排队）；留言带 `hop_count`（≤3，来源轮次由宿主 `agent/inbox/claimed` 归因，超限拒绝），主会话可读绑定空间内全部留言、子会话只读定向给自己的；工具 `memory_bind` / `memory_unbind` / `inbox_list` / `inbox_ack`。空间增删改查、绑定、记忆浏览/删除经 `/api/context-array`（读 loopback-only，写需 `x-context-array-ui: 1`）。 |
 | 人格劫持防护 | `src/persona.js`、`src/db.js`、`index.js` | 冻结人格块（section order 150，L1↔L3）：固定身份规则 + `personaTraits` + 有效 `personality` 记忆，每会话首次渲染后逐字节复用；`tools/post-execute` 监视 `web_search`/`web_fetch` 的文本，12 条中英规则命中后记 `persona/hijack-suspected`，`enforce` 模式追加 `<persona-guard>` 提醒（不阻断工具结果）。 |
 | 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板五个页签（空间 / 记忆 / 队列 / 留言箱 / 人格）；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
 
@@ -123,7 +123,7 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 ## 验证
 
 ```powershell
-node --test                              # 全仓单元 + 接线测试（187 项）
+node --test                              # 全仓单元 + 接线测试（195 项）
 node docs/analyze-usage.mjs              # 双轨指标 + TTL 空档 + 压缩事件
 node tools/seed-memories.mjs             # 往当前库塞 3 条种子记忆（幂等，用于快速试 memory_search）
 node tools/eval-retrieval.mjs            # M2 检索评测（向量 / 关键词 / 混合权重对比）
@@ -151,7 +151,7 @@ context_compact()
 | 长历史会话 | 49 | **1** | 0.9933 / **0.9986** / 0.9996 | 99.86%（17,932,672 / 24,523） |
 | 冷启动会话 | 49 | **1** | 0 / 0.9534 / 0.9987 | 97.92% |
 
-`prefixDigest` 每个会话全程只有 1 个值，说明**节点 0 + 工具声明确实逐字节不变**，
+早期样本里 `prefixDigest` 每个会话全程只有 1 个值（节点 0 + 工具声明逐字节不变）；后来压缩折叠与工具变更会出现多个值（当前会话实测 6 个），所以该结论只适用于没有折叠/工具变更的稳定段，
 这是前缀可复用的证据；命中率数字本身**不能**当作架构验收（见上面第 2 条）。
 
 实测还暴露并修掉了两个真缺陷：

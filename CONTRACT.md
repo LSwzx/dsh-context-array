@@ -1,7 +1,9 @@
 # M1 implementation contract (dsh-context-array)
 
-Plain ESM JavaScript (`"type": "module"`), **no npm dependencies**, no build step, no TypeScript.
-Runtime: the DSH Host process (Electron-as-Node 24.21) — `node:sqlite`, `node:crypto`, `node:fs`, `node:path`, `node:os` only.
+Plain ESM JavaScript (`"type": "module"`), no build step, no TypeScript. One runtime dependency:
+`@huggingface/transformers` for the local embedding worker.
+Runtime: the DSH Host process (Electron-as-Node 24.21) — `node:sqlite`, `node:crypto`, `node:fs`,
+`node:path`, `node:os`, plus `node:worker_threads` for the embedding worker.
 Do not import `@deepseek-ai/*` packages: profile-installed bundles cannot resolve them reliably.
 
 Repository root is `D:\dshprogram\dsh-context-array`. The package root **is** the repo root — never add a nested folder.
@@ -28,7 +30,7 @@ export function resolveConfig(raw) // raw = the Loader row's config object, may 
 //   spaceRules,     // default '...'
 //   observeUsage,   // default true
 //   bootstrapMessages, // default true
-//   schemaVersion,  // 1
+//   schemaVersion,  // 3
 // }
 ```
 Unknown keys are preserved, values validated by type; invalid values fall back to the default (never throw).
@@ -156,12 +158,12 @@ One JSONL line per fact, `at` ISO timestamp prepended, every write guarded.
 ## `src/compaction.js`
 
 ```js
-export const COMPACTION_MODES // ['off', 'observe']
+export const COMPACTION_MODES // ['off', 'observe', 'fold']
 
-export function createCompactionProvider({ mode, events, now })
+export function createCompactionProvider({ mode, events, now, foldOptions })
 // -> { name: 'compaction', compactIfNeeded, compactNow, compactRegion }
-// compactIfNeeded/compactNow record a sample and return null (never fold);
-// compactRegion throws (destructive path not implemented).
+// observe records a sample and returns null; fold delegates to src/compaction-fold.js;
+// compactRegion still throws (automatic/manual folding covers it).
 
 export function installCompactionTakeover({ ctx, config, events, warn, now })
 // 'off' -> { installed: false, reason: 'off' } and nothing is claimed.
@@ -274,10 +276,11 @@ export function getQueueItem(db, id)                      // one row + full raw_
 ## `src/memory-tools.js` (M3)
 
 ```js
-export function sessionBinding(db, sessionId)             // -> { spaceIds, role }
-export function createMemoryTools({ db, embedPassage, config, warn })
+export function sessionBinding(db, sessionId, fallbackSpaceId)  // -> { spaceIds, role, implicit? }
+export function createMemoryTools({ db, embedPassage, config, warn, ctx, inboxTracker })
 // -> [memory_propose, memory_queue_claim, memory_archive, memory_queue_settle,
-//     memory_queue_stats]
+//     memory_queue_stats, memory_bind, memory_unbind, inbox_send, inbox_list, inbox_ack,
+//     memory_search is registered separately by src/memory-tool.js]
 ```
 - `memory_propose` is open to every session and only enqueues.
 - Claim/archive/settle/stats are admin-gated **server-side**: `session_space_links.role === 'admin'`
@@ -343,8 +346,9 @@ endpoints are read-only by design: claiming/archiving/settling stay in the admin
 
 Hand-written browser bundle (`window.__ModuleLoader__.load({ id, factory })`), no build step.
 Registers `sidebar.panellist` (`id: 'context-array'`, order 40, label `记忆`) and the `main`
-keyed panel (`key: 'context-array'`), plus package CSS through the `styles` builtin. It never
-imports a Harness Client package and never touches another plugin's DOM.
+keyed panel (`key: 'context-array'`). Styles render as a component-local `<style>` element (no
+`styles` service dependency); tab content is wrapped in a React error boundary. It never imports a
+Harness Client package and never touches another plugin's DOM.
 
 ## `src/persona.js` (M5, persona hijack protection)
 
@@ -367,11 +371,22 @@ The frozen block is stored by `getOrCreatePersonaSnapshot(db, { sessionId, rende
 `session_persona_snapshot` and registered as prompt section `context-array:personality`
 (order 150, between L1 and L3).
 
+## `src/inbox-tracker.js` (M4 follow-up)
+
+```js
+export const MAX_HOP_COUNT = 3
+export function createInboxTracker({ db, now, warn })
+// -> { noteDelivery, onClaimed, onTurnStopping, triggerOf, nextHop, consumeWake }
+```
+Wire it to the host events: `agent/inbox/claimed` marks the row read and opens a turn
+trigger; `agent/turn-stopping` closes it. `nextHop(sessionId)` returns `{ hop, triggerMsgId }`
+or `null` at the ceiling; `consumeWake(sessionId)` enforces one wake per source per turn.
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
-`compactionMode` (`off` | `observe` | `fold`), `compactionWarnTokens` (default `300000`),
-`compactionAlarmRatio` (default `0.7`), `compactionFoldRatio` (default `0.85`),
+`compactionMode` (code default `off`; the shipped patch sets `fold`), `compactionWarnTokens`
+(code default `400000`), `compactionAlarmRatio` (code default `0.8`), `compactionFoldRatio` (default `0.85`),
 `compactionRetainRatio` (default `0.3`), `compactionMinFoldTokens` (default `8000`),
 `compactionSummaryMaxTokens` (default `600`), `promptSaltFile` (diagnostic; defaults to
 `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`), `modelsDir`

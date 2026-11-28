@@ -123,7 +123,7 @@ export function registerRoute(ctx, route, { events = null, warn = () => {} } = {
  *           events?: object | null, persona?: object | null }} input
  * @returns {() => void} disposer
  */
-export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null }) {
+export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null, inboxTracker = null }) {
   const route = {
     kind: 'prefix',
     path: API_PREFIX,
@@ -284,6 +284,8 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
             cooldownMinutes: config.wakeCooldownMinutes,
             inboxId: inbox.id,
             sourceSessionId: body.sourceSessionId ?? null,
+            tracker: inboxTracker,
+            hop: 0,
           })
           return json(res, 200, { inboxId: inbox.id, deduped: false, delivery })
         }
