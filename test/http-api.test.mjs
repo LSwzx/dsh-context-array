@@ -291,7 +291,7 @@ test('the picker lists persisted sessions (not only bound/live) with folded titl
         ids.map((id) => ({
           sessionId: id,
           status: 'fulfilled',
-          value: { title: { title: id === 'persisted-1' ? '很久以前的会话' : '当前会话' } },
+          value: { title: { title: id === 'persisted-1' ? '很久以前的会话' : '当前会话', source: { kind: 'provider' } } },
         })),
     },
   })
@@ -299,6 +299,7 @@ test('the picker lists persisted sessions (not only bound/live) with folded titl
   assert.equal(overview.status, 200)
   const persisted = overview.json.sessions.find((row) => row.sessionId === 'persisted-1')
   assert.equal(persisted.title, '很久以前的会话')
+  assert.equal(persisted.titleSource, 'provider')
   assert.equal(persisted.live, false)
   const live = overview.json.sessions.find((row) => row.sessionId === 'live-2')
   assert.equal(live.live, true)

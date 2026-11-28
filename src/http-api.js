@@ -154,7 +154,7 @@ async function listSessionsForPicker(ctx, db) {
   }
   // Anything bound but absent from the corpus still has to be selectable.
   for (const [id, links] of bindings) {
-    if (!entries.has(id)) entries.set(id, { sessionId: id, links, live: false, title: null, createdAt: null, subagent: false })
+    if (!entries.has(id)) entries.set(id, { sessionId: id, links, live: false, title: null, titleSource: null, createdAt: null, subagent: false })
   }
   // Live agents that the corpus does not know yet (a session created in this turn).
   let live = []
@@ -167,7 +167,7 @@ async function listSessionsForPicker(ctx, db) {
     if (!agent?.id) continue
     const entry = entries.get(agent.id)
     if (entry) entry.live = true
-    else entries.set(agent.id, { sessionId: agent.id, links: [], live: true, title: null, createdAt: null, subagent: false })
+    else entries.set(agent.id, { sessionId: agent.id, links: [], live: true, title: null, titleSource: null, createdAt: null, subagent: false })
   }
 
   const ids = [...entries.keys()]
@@ -183,9 +183,13 @@ async function listSessionsForPicker(ctx, db) {
       const results = await query.readTitleSnapshots(ids)
       for (const result of results ?? []) {
         if (result?.status !== 'fulfilled') continue
-        const title = result.value?.title?.title
+        const snapshot = result.value?.title
+        const title = snapshot?.title
         const entry = entries.get(result.sessionId)
-        if (entry && typeof title === 'string' && title !== '') entry.title = title
+        if (entry && typeof title === 'string' && title !== '') {
+          entry.title = title
+          entry.titleSource = snapshot?.source?.kind ?? null
+        }
       }
     } catch {
       // Titles are decoration; the picker still works with ids.

@@ -334,7 +334,7 @@ export const API_PREFIX = '/api/context-array'
 export function registerRoute(ctx, route, { events, warn })  // ctx.inject(["webServer"]) + http-api/* events
 export function registerContextArrayApi({ ctx, db, config, warn, events, persona })  // -> disposer
 ```
-Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionId, links, live, title }]`, queue,
+Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionId, links, live, title, titleSource }]`, queue,
 `wakeMaxPerHour`, defaultSpaceId; the session list is the host corpus from
 `ctx.get('sessionQuery').listSessions()` (live + persisted), titled via `readTitleSnapshots()`
 with `sessionTitle.get()` as the live fallback), `POST /spaces/create|/spaces/update|/spaces/delete`,

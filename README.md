@@ -54,7 +54,7 @@
 | 留言箱与多空间 | `src/inbox.js`、`src/spaces.js`、`src/http-api.js` | `inbox_send(wake?)` 排队走 `agent.inject`（不唤醒），唤醒走 `agent.followup` 并受每小时 10 次限流 + 每目标 10 分钟冷却 + 全局每小时 30 次（超限降级排队）；留言带 `hop_count`（≤3，来源轮次由宿主 `agent/inbox/claimed` 归因，超限拒绝），主会话可读绑定空间内全部留言、子会话只读定向给自己的；工具 `memory_bind` / `memory_unbind` / `inbox_list` / `inbox_ack`。空间增删改查、绑定、记忆浏览/删除经 `/api/context-array`（读 loopback-only，写需 `x-context-array-ui: 1`）。 |
 | 人格劫持防护 | `src/persona.js`、`src/db.js`、`index.js` | 冻结人格块（section order 150，L1↔L3）：固定身份规则 + `personaTraits` + 有效 `personality` 记忆，每会话首次渲染后逐字节复用；`tools/post-execute` 监视 `web_search`/`web_fetch` 的文本，12 条中英规则命中后记 `persona/hijack-suspected`，`enforce` 模式追加 `<persona-guard>` 提醒（不阻断工具结果）。 |
 | 记忆只读约束 | `src/http-api.js`、`client.js` | 人类没有修改记忆的权限：面板不提供编辑/删除，`POST /memories/delete` 恒为 `403 MEMORY_READ_ONLY`；记忆的写入与取代只能由记忆管理员通过 `memory_archive` 等工具完成。 |
-| 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板五个页签（空间 / 记忆 / 队列 / 留言箱 / 人格）；绑定与留言都从**会话下拉**选择，列出宿主的全部会话（在线 + 已归档，`sessionQuery.listSessions`），标题由 `readTitleSnapshots` 折叠、无标题显示 id 前缀，并提供"按标题/id 过滤"输入框；不需要手输 id；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
+| 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板五个页签（空间 / 记忆 / 队列 / 留言箱 / 人格）；绑定与留言都从**会话下拉**选择，列出宿主的全部会话（在线 + 已归档，`sessionQuery.listSessions`），标题由 `readTitleSnapshots` 折叠、无标题显示 id 前缀，默认**隐藏没有标题的会话**（勾选"显示未命名会话"才显示，标签为「未命名会话 · 短 id」而不是裸 uuid；标题来自首条消息时标注"（首条消息）"），并提供"按标题过滤"输入框；不需要手输 id；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
 
 ## 三条最容易搞混的口径
 

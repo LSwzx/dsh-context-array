@@ -90,6 +90,35 @@ window.__ModuleLoader__.load({
       return Math.floor(seconds / 86400) + ' 天';
     }
 
+    /** Short, human label for one session row (never the bare id for named sessions). */
+    function sessionLabelText(row) {
+      if (!row) return '';
+      const live = row.live ? ' · 在线' : '';
+      const title = typeof row.title === 'string' ? row.title.trim() : '';
+      if (title === '') return '未命名会话 · ' + String(row.sessionId).slice(0, 6) + live;
+      const short = title.length > 26 ? title.slice(0, 26) + '…' : title;
+      const source = row.titleSource === 'fallback' ? '（首条消息）' : '';
+      return short + source + live;
+    }
+
+    /**
+     * Options for a session picker.
+     *
+     * Untitled sessions (and their raw ids) are hidden by default — they made the list look
+     * like garbage. The current selection always stays visible, and the checkbox reveals the
+     * rest labelled "未命名会话".
+     */
+    function pickableSessions({ sessions, filter, showUntitled, current }) {
+      const needle = String(filter ?? '').trim().toLowerCase();
+      return sessions.filter((row) => {
+        if (row.sessionId === current) return true;
+        const titled = typeof row.title === 'string' && row.title.trim() !== '';
+        if (!titled && !showUntitled) return false;
+        if (needle === '') return true;
+        return (sessionLabelText(row) + ' ' + row.sessionId).toLowerCase().includes(needle);
+      });
+    }
+
     const CSS = `
 .ca-panel { display: flex; flex-direction: column; height: 100%; min-height: 0;
   color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
@@ -431,6 +460,7 @@ window.__ModuleLoader__.load({
       const [bindSession, setBindSession] = React.useState('');
       const [bindRole, setBindRole] = React.useState('main');
       const [sessionFilter, setSessionFilter] = React.useState('');
+      const [showUntitled, setShowUntitled] = React.useState(false);
 
       function beginEdit() {
         setEditName(selected ? selected.name : '');
@@ -451,14 +481,20 @@ window.__ModuleLoader__.load({
       if (!selected) return h('div', { className: 'ca-list', style: { padding: 14 } }, h('div', { className: 'ca-empty' }, '正在读取空间…'));
 
       const boundRows = bindings.filter((row) => row.space_id === selected.id);
+      const pickableForBind = pickableSessions({
+        sessions,
+        filter: sessionFilter,
+        showUntitled,
+        current: bindSession,
+      });
+      const bindValue = bindSession || (pickableForBind[0] ? pickableForBind[0].sessionId : '');
 
       /** Human label for a session: host title when available, else an id prefix. */
       function sessionLabel(rowOrId) {
         const row = typeof rowOrId === 'string' ? sessions.find((entry) => entry.sessionId === rowOrId) : rowOrId;
         if (!row) return String(rowOrId ?? '').slice(0, 8);
-        const name = row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8);
         const links = Array.isArray(row.links) && row.links.length > 0 ? ' · ' + row.links.map((link) => link.spaceId + '/' + link.role).join('、') : '';
-        return name + links + (row.live ? ' · 在线' : '');
+        return sessionLabelText(row) + links;
       }
 
       return h(
@@ -634,31 +670,33 @@ window.__ModuleLoader__.load({
                 { className: 'ca-row' },
                 h('input', {
                   className: 'ca-input',
-                  placeholder: '按标题 / id 过滤会话…',
+                  placeholder: '按标题过滤会话…',
                   value: sessionFilter,
                   onChange: (e) => setSessionFilter(e.target.value),
                   'aria-label': '过滤会话',
                 }),
                 h(
+                  'label',
+                  { className: 'ca-muted' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: showUntitled,
+                    onChange: (e) => setShowUntitled(e.target.checked),
+                  }),
+                  ' 显示未命名会话',
+                ),
+                h(
                   'select',
                   {
                     className: 'ca-input',
                     style: { flex: 1, minWidth: 220 },
-                    value: bindSession || (sessions[0] ? sessions[0].sessionId : ''),
+                    value: bindValue,
                     onChange: (e) => setBindSession(e.target.value),
                     'aria-label': '选择会话',
                   },
-                  sessions.length === 0
-                    ? h('option', { value: '' }, '没有可选择的会话')
-                    : sessions
-                        .filter((row) => {
-                          const current = bindSession || (sessions[0] ? sessions[0].sessionId : '');
-                          if (row.sessionId === current) return true;
-                          const needle = sessionFilter.trim().toLowerCase();
-                          if (needle === '') return true;
-                          return (sessionLabel(row) + ' ' + row.sessionId).toLowerCase().includes(needle);
-                        })
-                        .map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabel(row))),
+                  pickableForBind.length === 0
+                    ? h('option', { value: '' }, '没有匹配的会话')
+                    : pickableForBind.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabel(row))),
                 ),
                 h(
                   'select',
@@ -673,8 +711,8 @@ window.__ModuleLoader__.load({
                     disabled: busy || sessions.length === 0,
                     onClick: () =>
                       act('绑定', async () => {
-                        const sessionId = bindSession || (sessions[0] ? sessions[0].sessionId : '');
-                        if (!sessionId) return '没有可选择的会话';
+                        const sessionId = bindValue;
+                        if (!sessionId) return '没有匹配的会话';
                         await call('/bind', { method: 'POST', body: { sessionId, spaceId: selected.id, role: bindRole } });
                         return sessionLabel(sessionId) + ' 已绑定';
                       }),
@@ -1105,6 +1143,14 @@ window.__ModuleLoader__.load({
       const [loadError, setLoadError] = React.useState('');
       const [status, setStatus] = React.useState('pending');
       const [sessionFilter, setSessionFilter] = React.useState('');
+      const [showUntitled, setShowUntitled] = React.useState(false);
+      const pickableForInbox = pickableSessions({
+        sessions,
+        filter: sessionFilter,
+        showUntitled,
+        current: inboxTarget,
+      });
+      const inboxValue = inboxTarget || (pickableForInbox[0] ? pickableForInbox[0].sessionId : '');
 
       const sessionName = (id) => {
         if (!id) return '面板';
@@ -1198,37 +1244,33 @@ window.__ModuleLoader__.load({
                 { className: 'ca-row' },
                 h('input', {
                   className: 'ca-input',
-                  placeholder: '按标题 / id 过滤会话…',
+                  placeholder: '按标题过滤会话…',
                   value: sessionFilter,
                   onChange: (e) => setSessionFilter(e.target.value),
                   'aria-label': '过滤会话',
                 }),
                 h(
+                  'label',
+                  { className: 'ca-muted' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: showUntitled,
+                    onChange: (e) => setShowUntitled(e.target.checked),
+                  }),
+                  ' 显示未命名会话',
+                ),
+                h(
                   'select',
                   {
                     className: 'ca-input',
                     style: { minWidth: 200 },
-                    value: inboxTarget || (sessions[0] ? sessions[0].sessionId : ''),
+                    value: inboxValue,
                     onChange: (e) => setInboxTarget(e.target.value),
                     'aria-label': '目标会话',
                   },
-                  sessions.length === 0
-                    ? h('option', { value: '' }, '没有可选择的会话')
-                    : sessions
-                        .filter((row) => {
-                          const current = inboxTarget || (sessions[0] ? sessions[0].sessionId : '');
-                          if (row.sessionId === current) return true;
-                          const needle = sessionFilter.trim().toLowerCase();
-                          if (needle === '') return true;
-                          return ((row.title || '') + ' ' + row.sessionId).toLowerCase().includes(needle);
-                        })
-                        .map((row) =>
-                          h(
-                            'option',
-                            { key: row.sessionId, value: row.sessionId },
-                            (row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8)) + (row.live ? ' · 在线' : ''),
-                          ),
-                        ),
+                  pickableForInbox.length === 0
+                    ? h('option', { value: '' }, '没有匹配的会话')
+                    : pickableForInbox.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabelText(row))),
                 ),
                 h('input', { className: 'ca-input', style: { flex: 1 }, placeholder: '内容', value: inboxContent, onChange: (e) => setInboxContent(e.target.value), 'aria-label': '留言内容' }),
                 h('label', { className: 'ca-muted' }, h('input', { type: 'checkbox', checked: inboxWake, onChange: (e) => setInboxWake(e.target.checked) }), ' 唤醒'),
@@ -1239,8 +1281,8 @@ window.__ModuleLoader__.load({
                     disabled: busy || sessions.length === 0,
                     onClick: () =>
                       act('发送留言', async () => {
-                        const targetSessionId = inboxTarget || (sessions[0] ? sessions[0].sessionId : '');
-                        if (!targetSessionId) return '没有可选择的会话';
+                        const targetSessionId = inboxValue;
+                        if (!targetSessionId) return '没有匹配的会话';
                         const data = await call('/inbox/send', { method: 'POST', body: { targetSessionId, content: inboxContent, wake: inboxWake } });
                         setInboxContent('');
                         await loadInbox();
@@ -1265,6 +1307,8 @@ window.__ModuleLoader__.load({
       const sessions = (overview && overview.sessions) || [];
       const [data, setData] = React.useState(null);
       const [personaSession, setPersonaSession] = React.useState('');
+      const [showUntitled, setShowUntitled] = React.useState(false);
+      const personaSessions = pickableSessions({ sessions, filter: '', showUntitled, current: personaSession });
       const [draft, setDraft] = React.useState('');
       const [saving, setSaving] = React.useState(false);
       const [loadError, setLoadError] = React.useState('');
@@ -1304,7 +1348,6 @@ window.__ModuleLoader__.load({
       const traits = (data && data.traits) || [];
       const memories = (data && data.memories) || [];
       const profile = (data && data.profile) || { text: '', updatedBy: null, updatedAt: null, scope: 'global' };
-      const personaLabel = (row) => (row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8)) + (row.live ? ' · 在线' : '');
 
       return h(
         React.Fragment,
@@ -1322,7 +1365,17 @@ window.__ModuleLoader__.load({
               'aria-label': '选择要编辑人格的对话',
             },
             h('option', { value: '' }, '全局默认（未单独设定的对话使用）'),
-            sessions.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, personaLabel(row))),
+            personaSessions.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabelText(row))),
+          ),
+          h(
+            'label',
+            { className: 'ca-muted' },
+            h('input', {
+              type: 'checkbox',
+              checked: showUntitled,
+              onChange: (e) => setShowUntitled(e.target.checked),
+            }),
+            ' 显示未命名会话',
           ),
           h('button', { className: 'ca-btn', disabled: busy, onClick: () => load(personaSession) }, '刷新'),
           data ? h('span', { className: 'ca-badge is-neutral' }, '防护模式：' + (GUARD_MODE_TEXT[data.mode] || data.mode)) : null,
