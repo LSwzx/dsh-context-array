@@ -11,7 +11,7 @@ import { resolveConfig } from '../src/config.js'
 import { ensureDefaultSpace, openStore } from '../src/db.js'
 import { registerContextArrayApi } from '../src/http-api.js'
 
-function fixture(t, services = {}) {
+function fixture(t, services = {}, extra = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-api-'))
   const config = resolveConfig({ dataDir })
   const opened = openStore(config)
@@ -29,6 +29,7 @@ function fixture(t, services = {}) {
     db: opened.db,
     config,
     warn: () => {},
+    updateChecker: extra.updateChecker,
     persona: {
       mode: 'observe',
       tools: ['web_search', 'web_fetch'],
@@ -389,6 +390,32 @@ test('a human can edit the global persona through the API', async (t) => {
   })
   assert.equal(tooLong.status, 400)
   assert.equal(tooLong.json.error, 'PERSONA_TOO_LONG')
+})
+
+test('the update endpoint reports status and installs the requested version', async (t) => {
+  const installed = []
+  const checker = {
+    status: () => ({ current: '1.0.0', latest: '2.0.0', available: true, source: 'registry' }),
+    check: async () => ({ current: '1.0.0', latest: '2.0.0', available: true, source: 'registry' }),
+    install: async (version) => {
+      installed.push(version)
+      return { current: '1.0.0', latest: version, available: false, lastResult: { application: 'applied' } }
+    },
+  }
+  const { route } = fixture(t, {}, { updateChecker: checker })
+  const status = await request(route, { path: '/api/context-array/update' })
+  assert.equal(status.status, 200)
+  assert.equal(status.json.available, true)
+
+  const installed2 = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/update',
+    headers: { 'x-context-array-ui': '1' },
+    body: { version: '2.0.0' },
+  })
+  assert.equal(installed2.status, 200)
+  assert.deepEqual(installed, ['2.0.0'])
+  assert.equal(installed2.json.available, false)
 })
 
 test('memories support dimension filtering, paging and a total', async (t) => {

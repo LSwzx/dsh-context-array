@@ -232,7 +232,7 @@ async function listSessionsForPicker(ctx, db) {
  *           events?: object | null, persona?: object | null }} input
  * @returns {() => void} disposer
  */
-export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null, inboxTracker = null }) {
+export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null, inboxTracker = null, updateChecker = null }) {
   const route = {
     kind: 'prefix',
     path: API_PREFIX,
@@ -293,6 +293,17 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
             // Observability only.
           }
           return json(res, 200, { profile })
+        }
+        if (method === 'GET' && path === '/update') {
+          if (!updateChecker) return json(res, 200, { name: 'dsh-context-array', current: null, error: 'update-checker-unavailable' })
+          const wanted = url.searchParams.get('check')
+          const status = wanted === '1' ? await updateChecker.check({ auto: false }) : updateChecker.status()
+          return json(res, 200, status)
+        }
+        if (method === 'POST' && path === '/update') {
+          if (!updateChecker) return json(res, 503, { error: 'update-checker-unavailable' })
+          const version = typeof body.version === 'string' && body.version !== '' ? body.version : undefined
+          return json(res, 200, await updateChecker.install(version))
         }
         if (method === 'GET' && path === '/health') {
           return json(res, 200, { ok: true, spaces: listSpacesDetailed(db).length, queue: queueStats(db) })

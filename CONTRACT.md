@@ -387,6 +387,18 @@ Wire it to the host events: `agent/inbox/claimed` marks the row read and opens a
 trigger; `agent/turn-stopping` closes it. `nextHop(sessionId)` returns `{ hop, triggerMsgId }`
 or `null` at the ceiling; `consumeWake(sessionId)` enforces one wake per source per turn.
 
+## `src/update.js` (npm update)
+
+```js
+export const PACKAGE_VERSION
+export function compareVersions(left, right)   // -1 | 0 | 1
+export function createUpdateChecker({ ctx, config, events, warn, now })
+// -> { status, check({ auto }), install(version) }
+// check() uses ctx.get("pluginManager").listBundles()/listVersions(name);
+// auto-update installs only when the bundle source is "registry"; a path install is
+// reported as available but never overwritten. install() calls updateBundle(name, version).
+```
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
@@ -399,7 +411,11 @@ or `null` at the ceiling; `consumeWake(sessionId)` enforces one wake per source 
 `queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), `wakeMaxPerHour`
 (default `10`), `personaGuard` (`off` | `observe` | `enforce`, default `observe`),
 `personaTraits` (default `[]`), `personaGuardTools` (default `["web_search","web_fetch"]`),
-`wakeGlobalMaxPerHour` (default `30`), `wakeCooldownMinutes` (default `10`), `schemaVersion` (3), derived `dbPath`, `usageLogPath`, `eventsLogPath`.
+`wakeGlobalMaxPerHour` (default `30`), `wakeCooldownMinutes` (default `10`),
+`updateCheck` (default `true`), `updatePolicy` (`off` | `notify` | `auto`, default `notify`;
+the shipped patch uses `auto`), `updateCheckIntervalHours` (default `6`),
+`updateCheckDelaySeconds` (default `30`), `schemaVersion` (5), derived `dbPath`,
+`usageLogPath`, `eventsLogPath`.
 
 ## Tests
 

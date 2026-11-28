@@ -101,6 +101,15 @@ node tools/fetch-model.mjs           # 包内脚本：下载一次 e5-small 到 
 > 发布维护者：`npm publish` 前会自动执行 `node --test`（`prepublishOnly`）；当前包名
 > `dsh-context-array` 在 npm 上未被占用。
 
+## 更新与自动更新
+
+- 插件启动约 30 秒后检查一次 npm registry，之后每 `updateCheckIntervalHours`（默认 6）小时一次。
+- 有新版本时，面板顶部显示「发现新版本 vX.Y.Z」与「立即更新」按钮；更新走 DSH 插件管理器
+  （`pluginManager.updateBundle`），HMR 生效或提示重启。
+- `updatePolicy: auto` 时，**npm registry 安装**会在检查到新版本后自动更新；本地路径/链接安装
+  （开发目录）不会被自动更新，只提示可用版本。
+- 事件：`update/checked`、`update/applied`、`update/failed`，可在 `events.jsonl` 审计。
+
 ## 配置
 
 `cordis.patch.yml` 的配置项：
@@ -130,6 +139,10 @@ node tools/fetch-model.mjs           # 包内脚本：下载一次 e5-small 到 
 | `personaGuard` | `observe` | `off` 关闭；`observe` 只记录投毒尝试；`enforce` 记录并在该步追加保持人格的提醒 |
 | `personaTraits` | `[]` | 部署级人格补充特征（每行一条），追加在对话人格之后 |
 | `personaGuardTools` | `["web_search","web_fetch"]` | 监视哪些工具的外部结果 |
+| `updateCheck` | `true` | 启动后检查 npm 新版本 |
+| `updatePolicy` | `notify` | `off` / `notify` / `auto`；随包 patch 设为 `auto`（仅 registry 安装会自动更新） |
+| `updateCheckIntervalHours` | `6` | 检查间隔（小时） |
+| `updateCheckDelaySeconds` | `30` | 启动后延迟多久做第一次检查 |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
 > 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，

@@ -51,6 +51,7 @@ import { createMemorySearchTool } from './src/memory-tool.js'
 import { createContextCompactTool } from './src/compact-tool.js'
 import { createMemoryTools } from './src/memory-tools.js'
 import { createInboxTracker } from './src/inbox-tracker.js'
+import { createUpdateChecker } from './src/update.js'
 import { registerContextArrayApi } from './src/http-api.js'
 
 export const name = 'dsh-context-array'
@@ -168,6 +169,30 @@ export function apply(ctx, rawConfig = {}) {
   ctx.on('agent/inbox/claimed', (payload) => inboxTracker.onClaimed(payload))
   ctx.on('agent/turn-stopping', (payload) => inboxTracker.onTurnStopping(payload))
 
+  // npm update detection / auto-update. The plugin manager owns installation; this only
+  // schedules checks. A local (path) install is never auto-updated: the registry update
+  // path only exists for registry copies.
+  const updateChecker = createUpdateChecker({ ctx, config, events, warn: warn('update') })
+  if (config.updateCheck && config.updatePolicy !== 'off') {
+    let interval = null
+    const startDelay = setTimeout(() => {
+      updateChecker.check({ auto: true })
+      interval = setInterval(
+        () => updateChecker.check({ auto: true }),
+        config.updateCheckIntervalHours * 3600 * 1000,
+      )
+      interval.unref?.()
+    }, config.updateCheckDelaySeconds * 1000)
+    startDelay.unref?.()
+    ctx.effect(
+      () => () => {
+        clearTimeout(startDelay)
+        if (interval !== null) clearInterval(interval)
+      },
+      'context-array:update-check',
+    )
+  }
+
   // M4: the sidebar panel's Host API. Optional: deployments without a web server
   // simply never expose the panel's data.
   try {
@@ -178,6 +203,7 @@ export function apply(ctx, rawConfig = {}) {
       warn: warn('http-api'),
       events,
       inboxTracker,
+      updateChecker,
       persona: {
         mode: personaGuard.mode,
         tools: personaGuard.tools,

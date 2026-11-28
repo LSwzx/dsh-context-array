@@ -18,6 +18,8 @@
   侧边栏五页签面板、主会话选择器（过滤子智能体）、会话选择器隐藏未命名会话。
 - **M5 人格防护**：每对话人格（AI 可写、人类可改）、12 条中英投毒规则、
   `observe/enforce` 守护；人格块位于 L1 与 L3 之间。
+- **更新检测与自动更新**：通过 DSH 插件管理器检查 npm 新版本，面板一键更新；
+  `updatePolicy: auto` 时 registry 安装会自动更新，本地链接安装只提示。
 
 安装后请执行一次 `node tools/fetch-model.mjs` 下载本地 embedding 模型（约 129 MiB）；
 不想用向量检索可设置 `enableEmbedding: false`。

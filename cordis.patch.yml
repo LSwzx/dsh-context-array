@@ -26,3 +26,7 @@
         queueStaleMinutes: 10
         queueMaxRetries: 3
         wakeMaxPerHour: 10   # M4 inbox wake rate limit per target session
+        # Update check / auto-update (registry installs only; a path install is skipped).
+        updateCheck: true
+        updatePolicy: auto   # off | notify | auto
+        updateCheckIntervalHours: 6

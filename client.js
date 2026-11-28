@@ -296,6 +296,8 @@ window.__ModuleLoader__.load({
       const [activeSpaceId, setActiveSpaceId] = React.useState('');
       const [overview, setOverview] = React.useState(null);
       const [overviewError, setOverviewError] = React.useState('');
+      const [update, setUpdate] = React.useState(null);
+      const [updateBusy, setUpdateBusy] = React.useState(false);
       const [status, setStatus] = React.useState({ kind: 'ok', text: '' });
       const [busy, setBusy] = React.useState(false);
       const statusTimer = React.useRef(null);
@@ -325,6 +327,9 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         refreshOverview().catch((error) => note(error.message, 'error'));
+        call('/update?check=1')
+          .then((status) => setUpdate(status))
+          .catch(() => {});
       }, []);
 
       async function copy(kind, text) {
@@ -350,6 +355,25 @@ window.__ModuleLoader__.load({
       }
 
       const common = { note, act, busy, copy, overview, activeSpaceId, setActiveSpaceId, setTab };
+
+      async function runUpdate() {
+        if (updateBusy || !update || !update.latest) return;
+        setUpdateBusy(true);
+        try {
+          const status = await call('/update', { method: 'POST', body: { version: update.latest } });
+          setUpdate(status);
+          note(
+            status.error
+              ? '更新失败：' + status.error
+              : '更新已提交（' + (status.lastResult?.application || 'applied') + '），刷新页面后生效',
+            status.error ? 'error' : 'ok',
+          );
+        } catch (error) {
+          note('更新失败：' + error.message, 'error');
+        } finally {
+          setUpdateBusy(false);
+        }
+      }
       const [guideOpen, setGuideOpen] = React.useState(() => {
         try {
           return localStorage.getItem('context-array-guide') !== '1';
@@ -396,7 +420,26 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ca-hint' }, '② 需要按项目隔离时：在「空间」页新建空间，再从下拉里选择会话绑定到它（不需要输入 id；也可在对话里用 memory_bind）。'),
               h('div', { className: 'ca-hint' }, '③ 「记忆」页只读：按空间与维度查看有效记忆；人类没有修改权限，写入/失效只由记忆管理员在对话里完成。'),
               h('div', { className: 'ca-hint' }, '④ 「队列」只读，由记忆管理员在对话里领取/归档/拒绝；「留言箱」可发留言，勾选唤醒会开启对方一轮并有每小时限流。'),
-              h('div', { className: 'ca-hint' }, '⑤ 「人格」页展示身份规则与投毒尝试记录：插件会冻结人格块并监视网页/搜索类工具结果，外部内容改不了人格。'),
+              h('div', { className: 'ca-hint' }, '⑤ 「人格」页按对话展示与编辑人格：AI 可自己写，你也能选一个对话修改；外部网页/工具结果改不了它。'),
+            )
+          : null,
+        update && update.available
+          ? h(
+              'div',
+              { className: 'ca-card', style: { margin: '10px 14px 0' } },
+              h(
+                'div',
+                { className: 'ca-card-head' },
+                h('span', { className: 'ca-name' }, '发现新版本 v' + update.latest),
+                h('button', { className: 'ca-btn', disabled: updateBusy, onClick: runUpdate }, updateBusy ? '更新中…' : '立即更新'),
+              ),
+              h(
+                'div',
+                { className: 'ca-hint' },
+                '当前 v' + update.current + '；来源：' +
+                  (update.source === 'registry' ? 'npm registry' : update.source || '本地安装') +
+                  '。更新由 DSH 插件管理器执行，完成后可能需要刷新页面。',
+              ),
             )
           : null,
         overviewError

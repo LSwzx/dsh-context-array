@@ -159,6 +159,17 @@ export function resolveConfig(raw) {
       Array.isArray(input.personaGuardTools) && input.personaGuardTools.length > 0
         ? input.personaGuardTools.filter((value) => typeof value === 'string' && value.trim() !== '')
         : [...DEFAULT_PERSONA_GUARD_TOOLS],
+    // npm update detection / auto-update (src/update.js).
+    updateCheck: booleanOr(input.updateCheck, true),
+    updatePolicy: ['off', 'notify', 'auto'].includes(input.updatePolicy) ? input.updatePolicy : 'notify',
+    updateCheckIntervalHours:
+      Number.isSafeInteger(input.updateCheckIntervalHours) && input.updateCheckIntervalHours > 0
+        ? input.updateCheckIntervalHours
+        : 6,
+    updateCheckDelaySeconds:
+      Number.isSafeInteger(input.updateCheckDelaySeconds) && input.updateCheckDelaySeconds >= 0
+        ? input.updateCheckDelaySeconds
+        : 30,
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),

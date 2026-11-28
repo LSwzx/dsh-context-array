@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.5.2)
+# dsh-context-array 产品需求与技术架构文档 (v4.6.0)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,20 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.5.2 → v4.6.0（更新检测与自动更新，2026-11-28）**
+
+- 新增 `src/update.js`：`compareVersions` 与 `createUpdateChecker`，通过宿主 `ctx.pluginManager`
+  的 `listBundles()` / `listVersions(name)` / `updateBundle(name, version)` 完成检测与更新；
+  只有来源为 `registry` 的安装会在 `updatePolicy: auto` 下自动更新，路径/链接安装只提示。
+- 启动约 30 秒后检查一次，之后每 6 小时一次（`updateCheck` / `updateCheckIntervalHours` /
+  `updateCheckDelaySeconds`）；事件 `update/checked|applied|failed`。
+- 面板顶部新增「发现新版本」横幅与「立即更新」按钮；`GET /update`（`?check=1` 强制检查）与
+  `POST /update` 暴露给面板。
+- 随包 patch 设 `updatePolicy: auto`；单测 209 项（新增版本比较、notify/auto/路径安装、安装失败、
+  update API 用例）。
+
+**v4.5.1 → v4.5.2（中文名改为「通联 - 多会话记忆插件」，准备 npm 发布，2026-11-28）**
 
 **v4.5.1 → v4.5.2（中文名改为「通联 - 多会话记忆插件」，准备 npm 发布，2026-11-28）**
 
