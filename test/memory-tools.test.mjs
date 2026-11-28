@@ -318,3 +318,24 @@ test('hop ceiling, per-turn wake budget and inbox visibility follow the design',
   const subMessages = await byName.inbox_list.execute({ status: 'all' }, { agent: { id: 'session-sub' } })
   assert.equal(subMessages.messages.some((row) => row.content === 'broadcast'), false, 'sub does not read other targets')
 })
+
+test('rejections must use the prompt reason enum', async (t) => {
+  const { byName } = fixture(t)
+  const queued = await byName.memory_propose.execute({ raw_content: '你好呀' }, { agent: { id: MAIN } })
+  const claim = await byName.memory_queue_claim.execute({}, { agent: { id: ADMIN } })
+  assert.equal(claim.item.queueId, queued.proposalId)
+
+  const invalid = await byName.memory_queue_settle.execute(
+    { queueId: claim.item.queueId, status: 'rejected', reason: '随便写的' },
+    { agent: { id: ADMIN } },
+  )
+  assert.equal(invalid.settled, false)
+  assert.equal(invalid.reason, 'INVALID_REASON')
+  assert.ok(invalid.acceptedReasons.includes('LOW_VALUE'))
+
+  const valid = await byName.memory_queue_settle.execute(
+    { queueId: claim.item.queueId, status: 'rejected', reason: 'LOW_VALUE' },
+    { agent: { id: ADMIN } },
+  )
+  assert.equal(valid.settled, true)
+})

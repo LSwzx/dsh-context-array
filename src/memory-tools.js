@@ -60,8 +60,19 @@ const SETTLE_OUTPUT = {
   properties: {
     settled: { type: 'boolean' },
     reason: { type: 'string' },
+    acceptedReasons: { type: 'array', items: { type: 'string' } },
   },
 }
+
+/** Rejection reasons the admin prompt declares; enforced for `status: rejected`. */
+export const REJECT_REASON_CODES = Object.freeze([
+  'LOW_VALUE',
+  'DUPLICATE',
+  'SUSPICIOUS_CONTENT',
+  'SECRET',
+  'EXPIRED',
+  'UNBOUND_SPACE',
+])
 
 const BIND_OUTPUT = {
   type: 'object',
@@ -341,7 +352,8 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
       name: 'memory_queue_settle',
       description:
         'Reject or fail one claimed proposal without archiving it (central memory manager only). ' +
-        'Rejection is a normal decision; failure means it could not be processed.',
+        'Rejection is a normal decision; failed means it could not be processed. A rejection reason ' +
+        'must be one of LOW_VALUE, DUPLICATE, SUSPICIOUS_CONTENT, SECRET, EXPIRED or UNBOUND_SPACE.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -349,7 +361,11 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         properties: {
           queueId: { type: 'string', description: 'Claimed queue item id.' },
           status: { type: 'string', enum: ['rejected', 'failed'], description: 'Terminal status to record.' },
-          reason: { type: 'string', description: 'Why it was rejected or failed.' },
+          reason: {
+            type: 'string',
+            enum: [...REJECT_REASON_CODES],
+            description: 'For rejected: one of the six enum values. For failed: free text.',
+          },
         },
       },
       output: {
@@ -370,6 +386,9 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         const queueId = typeof args?.queueId === 'string' ? args.queueId.trim() : ''
         const status = String(args?.status ?? '')
         if (queueId === '') return { settled: false, reason: 'MISSING_QUEUE_ID' }
+        if (status === 'rejected' && !REJECT_REASON_CODES.includes(String(args?.reason ?? '').trim())) {
+          return { settled: false, reason: 'INVALID_REASON', acceptedReasons: [...REJECT_REASON_CODES] }
+        }
         try {
           const settled = settleClaim(db, queueId, status, { error: args?.reason })
           return { settled, ...(settled ? {} : { reason: 'NOT_PROCESSING' }) }

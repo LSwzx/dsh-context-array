@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3 (2026-11-28)
+
+- 记忆管理员提示词改版：`recent` 明显过期时拒稿 `EXPIRED`；冲突取代只填**最新一条**旧记忆
+  （单链、不跳版本）；新增六值拒稿原因枚举；简报固定为单行
+  `[Summary] archived={N}, rejected={M}, failed={K}, details={...}`。
+- `memory_queue_settle` 在 `status="rejected"` 时校验原因枚举，非法值返回 `INVALID_REASON` 与
+  `acceptedReasons`（队列项保持 processing）。
+- 新增 `test/prompt.test.mjs`（提示词与代码枚举同步断言）与 `test/memory-tools.test.mjs` 的
+  非法原因用例；单测 219 项。
+
 ## 1.0.2 (2026-11-28)
 
 - 重写中央记忆管理员的 L3 角色提示（`src/prompt.js` 的 `ADMIN_L3_TEXT`），按基本版修订：
