@@ -231,7 +231,7 @@ window.__ModuleLoader__.load({
       const size = Math.max(16, (props && props.size ? props.size : 22) - 2);
       return h(
         'span',
-        { className: 'ca-icon' + (props && props.active ? ' is-active' : ''), role: 'img', 'aria-label': '记忆' },
+        { className: 'ca-icon' + (props && props.active ? ' is-active' : ''), role: 'img', 'aria-label': '通联 - 多会话记忆插件' },
         h(
           'svg',
           { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, fill: 'none',
@@ -1506,7 +1506,7 @@ window.__ModuleLoader__.load({
       if (!ctx.slots) return;
       ctx.slots.inject('sidebar.panellist', () =>
         ctx.slots.register(
-          { name: 'sidebar.panellist', id: 'context-array', order: 40, label: () => '记忆' },
+          { name: 'sidebar.panellist', id: 'context-array', order: 40, label: () => '通联 - 多会话记忆插件' },
           SidebarIcon,
         ),
       );

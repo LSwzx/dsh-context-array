@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.6.0)
+# dsh-context-array 产品需求与技术架构文档 (v4.6.1)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,19 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.6.0 → v4.6.1（实机 E2E 验收与 UI/工具修复，2026-11-28）**
+
+- 侧边栏入口名称改为「通联 - 多会话记忆插件」；`client-source.test` 增加静态断言。
+- **P0 修复**：更新检测引入的 `inboxTracker` 初始化顺序导致 `createMemoryTools` TDZ，
+  记忆提案/绑定/队列/留言工具在真实宿主全部未注册；调整初始化顺序，并在 `apply.test` 的
+  假宿主里注册 tools，断言 9 个工具确实存在（此前 catch 吞掉了异常，测试未覆盖）。
+- **修复**：`inbox_send` 输出 schema 缺 `hop`/`reason`（E2E R4 暴露）。
+- 新增 `docs/E2E-REPORT.md`（4 会话 / 5 轮 / 45 请求 / 18.50M prompt token；实测 ¥3.94 vs
+  无缓存 ¥37.04，节省 89.4%）与 `docs/e2e-data.json`。
+- 单测 210 项。
+
+**v4.5.2 → v4.6.0（更新检测与自动更新，2026-11-28）**
 
 **v4.5.2 → v4.6.0（更新检测与自动更新，2026-11-28）**
 

@@ -17,11 +17,18 @@ function createFakeHost() {
   const listeners = new Map()
   const effects = []
   const agentSections = []
+  const tools = []
   const ctx = {
     logger: () => ({ warn() {} }),
     effect(execute) {
       effects.push(execute())
       return () => {}
+    },
+    tools: {
+      register(tool) {
+        tools.push(tool)
+        return () => {}
+      },
     },
     systemPrompt: {
       section(section) {
@@ -64,7 +71,7 @@ function createFakeHost() {
     if (name === 'agents') return undefined
     return undefined
   }
-  return { ctx, agent, sections, agentSections, listeners, effects, provided }
+  return { ctx, agent, sections, agentSections, listeners, effects, provided, tools }
 }
 
 /**
@@ -98,6 +105,20 @@ test('apply registers L1/L3 globally and one L4 section per session', (t) => {
     host.sections.map((section) => section.order),
     [100, 200],
   )
+
+  const toolNames = host.tools.map((tool) => tool.name)
+  for (const expected of [
+    'memory_search',
+    'memory_propose',
+    'memory_bind',
+    'memory_archive',
+    'memory_queue_claim',
+    'inbox_send',
+    'inbox_list',
+    'persona_write',
+  ]) {
+    assert.ok(toolNames.includes(expected), `tool ${expected} is registered (found ${toolNames.join(',')})`)
+  }
 
   const [agentCreated] = host.listeners.get('agent/created') ?? []
   assert.equal(typeof agentCreated, 'function')

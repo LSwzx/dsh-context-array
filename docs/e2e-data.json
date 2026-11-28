@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-11-28T05:39:28.872Z",
+  "priceAssumption": {
+    "miss": 2,
+    "hit": 0.2,
+    "output": 3
+  },
+  "baselineLine": 1376,
+  "sessions": [
+    {
+      "sessionId": "ef62b67e-09a8-4f18-9424-c7b3aa449cef",
+      "label": "管理员（本会话）",
+      "requests": 33,
+      "prompt": 18209636,
+      "miss": 85604,
+      "hit": 18124032,
+      "output": 10015,
+      "prefix": 646372,
+      "prefixHit": 646372
+    },
+    {
+      "sessionId": "eff3a653-fab6-4dea-9b84-b219c8ca223c",
+      "label": "主会话 e2e-main",
+      "requests": 6,
+      "prompt": 146867,
+      "miss": 25139,
+      "hit": 121728,
+      "output": 351,
+      "prefix": 119142,
+      "prefixHit": 99413
+    },
+    {
+      "sessionId": "9520a295-3cf5-41a2-b25e-6e71f9d6a34a",
+      "label": "子会话 1 e2e-sub1",
+      "requests": 3,
+      "prompt": 72751,
+      "miss": 1583,
+      "hit": 71168,
+      "output": 148,
+      "prefix": 59571,
+      "prefixHit": 59571
+    },
+    {
+      "sessionId": "4ac1bb76-14a5-4aff-869f-c6dbb7f35a2a",
+      "label": "子会话 2 e2e-sub2",
+      "requests": 3,
+      "prompt": 73528,
+      "miss": 1720,
+      "hit": 71808,
+      "output": 704,
+      "prefix": 59571,
+      "prefixHit": 59571
+    }
+  ],
+  "totals": {
+    "requests": 45,
+    "prompt": 18502782,
+    "miss": 114046,
+    "hit": 18388736,
+    "output": 11218,
+    "prefix": 884656,
+    "prefixHit": 864927,
+    "hitRate": 0.9938362782418341,
+    "prefixHitRate": 0.977698676095567
+  },
+  "cost": {
+    "actual": 3.9394932000000003,
+    "noCache": 37.039218,
+    "savings": 33.0997248,
+    "savingsPct": 0.8936399467180975
+  }
+}

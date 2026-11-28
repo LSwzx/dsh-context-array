@@ -132,6 +132,13 @@ export function apply(ctx, rawConfig = {}) {
     warn('memory-tool')(error)
   }
 
+  // Inbox hop tracking: `agent/inbox/claimed` proves a delivered message started the
+  // current turn, `agent/turn-stopping` closes it. Used for hop_count and the one-wake
+  // per source per turn rule. Created before the tools that capture it.
+  const inboxTracker = createInboxTracker({ db: store.db, warn: warn('inbox-tracker') })
+  ctx.on('agent/inbox/claimed', (payload) => inboxTracker.onClaimed(payload))
+  ctx.on('agent/turn-stopping', (payload) => inboxTracker.onTurnStopping(payload))
+
   // M3: proposal queue + the manager's write path. `memory_propose` is open to every
   // session; claim/archive/settle self-gate on a server-side admin check.
   try {
@@ -162,12 +169,7 @@ export function apply(ctx, rawConfig = {}) {
   const personaGuard = createPersonaGuard({ config, events, warn: warn('persona-guard') })
   ctx.on('tools/post-execute', (exec, result, next) => personaGuard.handle(exec, result, next))
 
-  // Inbox hop tracking: `agent/inbox/claimed` proves a delivered message started the
-  // current turn, `agent/turn-stopping` closes it. Used for hop_count and the one-wake
-  // per source per turn rule.
-  const inboxTracker = createInboxTracker({ db: store.db, warn: warn('inbox-tracker') })
-  ctx.on('agent/inbox/claimed', (payload) => inboxTracker.onClaimed(payload))
-  ctx.on('agent/turn-stopping', (payload) => inboxTracker.onTurnStopping(payload))
+  // Inbox hop tracking is created above, before the tools that capture it.
 
   // npm update detection / auto-update. The plugin manager owns installation; this only
   // schedules checks. A local (path) install is never auto-updated: the registry update

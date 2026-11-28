@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 (2026-11-28)
+
+- 侧边栏入口名称改为「通联 - 多会话记忆插件」（此前硬编码为「记忆」）。
+- **修复（P0）**：新增更新检测时 `inboxTracker` 在工具注册之后才初始化，
+  `createMemoryTools` 读取未初始化常量触发 TDZ，记忆提案/绑定/队列/留言工具全部未注册。
+  已把初始化提前；`apply.test` 现在断言这些工具确实注册。
+- **修复**：`inbox_send` 输出 schema 缺 `hop`/`reason`，`additionalProperties:false` 导致
+  工具执行成功但返回校验失败（E2E R4 发现）。
+- 新增实机验证与 Token 收益报告 `docs/E2E-REPORT.md` + 原始数据 `docs/e2e-data.json`。
+
 ## 1.0.0 (2026-11-28)
 
 首个 npm 发布版本，插件中文名 **通联 - 多会话记忆插件**（包名 `dsh-context-array`）。

@@ -83,6 +83,8 @@ const INBOX_SEND_OUTPUT = {
     deduped: { type: 'boolean' },
     targetSessionId: { type: 'string' },
     delivery: { type: 'string' },
+    hop: { type: 'number' },
+    reason: { type: 'string' },
     error: { type: 'string' },
   },
 }

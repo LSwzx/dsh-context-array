@@ -38,6 +38,11 @@ test('the queue status pill has a label fallback for unknown statuses', () => {
   assert.match(source, /STATUS_META\[status\] \|\| \{ glyph: '\?', label: String\(status \?\? ''\) \}/)
 })
 
+test('the sidebar entry shows the full plugin name', () => {
+  assert.match(source, /label: \(\) => '通联 - 多会话记忆插件'/)
+  assert.doesNotMatch(source, /label: \(\) => '记忆'/)
+})
+
 test('tab content is wrapped in an error boundary', () => {
   assert.match(source, /class TabBoundary extends React\.Component/)
   assert.match(source, /h\(\s*TabBoundary,/)
