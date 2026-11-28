@@ -214,14 +214,52 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function StatusGlyph(status) {
-      const meta = STATUS_META[status] || { glyph: '?', label: status };
+    /**
+     * Status pill: glyph + label so colour is never the only signal.
+     *
+     * Must take a props object (it is used as `h(StatusGlyph, { status })`); a positional
+     * parameter would receive the props object and render it as a React child.
+     */
+    function StatusGlyph({ status }) {
+      const meta = STATUS_META[status] || { glyph: '?', label: String(status ?? '') };
       return h(
         'span',
         { className: 'ca-row', style: { gap: 4 } },
-        h('span', { className: 'ca-glyph is-' + status, 'aria-hidden': true }, meta.glyph),
+        h('span', { className: 'ca-glyph is-' + String(status), 'aria-hidden': true }, meta.glyph),
         h('span', null, meta.label),
       );
+    }
+
+    /**
+     * Per-tab error boundary: one crashing tab shows its message instead of blanking the
+     * whole panel (React unmounts the tree when a render throws).
+     */
+    class TabBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      componentDidCatch(error) {
+        try {
+          console.error('context-array tab crashed', error);
+        } catch {
+          /* logging is best effort */
+        }
+      }
+      render() {
+        if (this.state.error) {
+          return h(
+            'div',
+            { className: 'ca-card', style: { margin: '10px 14px 0' } },
+            h('div', { className: 'ca-error' }, h('span', null, '这个页签渲染失败：' + String(this.state.error.message || this.state.error))),
+            h('button', { className: 'ca-btn', onClick: () => this.setState({ error: null }) }, '重试'),
+          );
+        }
+        return this.props.children;
+      }
     }
 
     function Panel() {
@@ -357,15 +395,19 @@ window.__ModuleLoader__.load({
           : null,
         overviewError && !overview
           ? null
-          : tab === 'spaces'
-          ? h(SpacesTab, common)
-          : tab === 'memories'
-            ? h(MemoriesTab, common)
-            : tab === 'queue'
-              ? h(QueueTab, common)
-              : tab === 'inbox'
-                ? h(InboxTab, common)
-                : h(PersonaTab, common),
+          : h(
+              TabBoundary,
+              null,
+              tab === 'spaces'
+                ? h(SpacesTab, common)
+                : tab === 'memories'
+                  ? h(MemoriesTab, common)
+                  : tab === 'queue'
+                    ? h(QueueTab, common)
+                    : tab === 'inbox'
+                      ? h(InboxTab, common)
+                      : h(PersonaTab, common),
+            ),
       );
     }
 
