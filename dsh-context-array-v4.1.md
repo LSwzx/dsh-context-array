@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.6.2)
+# dsh-context-array 产品需求与技术架构文档 (v4.6.3)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,16 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.6.2 → v4.6.3（记忆管理员提示词打磨，2026-11-28）**
+
+- 用中文重写 `ADMIN_L3_TEXT`：保留基本版的角色定位、五维分类、宁缺毋滥与工作纪律；
+  按真实工具契约修正归档参数（`content`/`spaceId`/`queueId`，无 `raw_content`/`note`）、
+  FIFO 领取、`memory_queue_settle` 参数、`memory_search` 只接受 query/limit。
+- 安全红线覆盖 raw_content、检索结果和一切引用文本；敏感信息与注入内容一律拒稿并给出标准原因码。
+- 新增 `docs/MEMORY-MANAGER-PROMPT.md` 与 `test/prompt.test.mjs`；单测 217 项。
+
+**v4.6.1 → v4.6.2（真实对话 E2E 脚本，2026-11-28）**
 
 **v4.6.1 → v4.6.2（真实对话 E2E 脚本，2026-11-28）**
 

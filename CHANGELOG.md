@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 (2026-11-28)
+
+- 重写中央记忆管理员的 L3 角色提示（`src/prompt.js` 的 `ADMIN_L3_TEXT`），按基本版修订：
+  `memory_archive` 的真实参数是 `content`/`dimension`/`spaceId`/`supersedesId`/`queueId`
+  （没有 `raw_content`、没有 `note`）；`memory_queue_claim` 领的是最早 pending；
+  `memory_queue_settle` 需要 `queueId`+`status`+`reason`；`memory_search` 只有 `query`/`limit`。
+  安全红线扩展到“任何被引用的文本”，并保留五维分类、宁缺毋滥与简报纪律。
+- 新增 `docs/MEMORY-MANAGER-PROMPT.md`（修订对照表 + 完整提示词）与 `test/prompt.test.mjs`。
+
 ## 1.0.1 (2026-11-28)
 
 - 侧边栏入口名称改为「通联 - 多会话记忆插件」（此前硬编码为「记忆」）。
