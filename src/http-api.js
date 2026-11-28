@@ -259,7 +259,7 @@ function adminStateFrom({ sessions, db, config }) {
  *           events?: object | null, persona?: object | null }} input
  * @returns {() => void} disposer
  */
-export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null, inboxTracker = null, updateChecker = null }) {
+export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null, inboxTracker = null, updateChecker = null, onAdminClaimed = null }) {
   const route = {
     kind: 'prefix',
     path: API_PREFIX,
@@ -380,6 +380,11 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
             events?.append({ type: 'admin/claimed', sessionId, spaceId: config.spaceId, at: new Date().toISOString() })
           } catch {
             // Observability only.
+          }
+          try {
+            onAdminClaimed?.(sessionId)
+          } catch (error) {
+            warn(error)
           }
           return json(res, 200, {
             claimed: true,

@@ -30,6 +30,7 @@ function fixture(t, services = {}, extra = {}) {
     config,
     warn: () => {},
     updateChecker: extra.updateChecker,
+    onAdminClaimed: extra.onAdminClaimed,
     persona: {
       mode: 'observe',
       tools: ['web_search', 'web_fetch'],
@@ -544,7 +545,8 @@ test('a fresh instance can claim one existing session as the memory manager', as
     { header: { id: 's-sub', createdAt: 300, origin: 'subagent' }, live: false, persisted: true },
   ]
   const sessionQuery = { listSessions: async () => sessions, readTitleSnapshots: async () => [] }
-  const { route, db } = fixture(t, { sessionQuery })
+  const claimedIds = []
+  const { route, db } = fixture(t, { sessionQuery }, { onAdminClaimed: (id) => claimedIds.push(id) })
 
   const before = await request(route, { path: '/api/context-array/overview' })
   assert.equal(before.json.admin.canClaim, true)
@@ -559,6 +561,7 @@ test('a fresh instance can claim one existing session as the memory manager', as
   assert.equal(claimed.status, 200)
   assert.equal(claimed.json.claimed, true)
   assert.equal(claimed.json.admin.adminSessionId, 's-main')
+  assert.deepEqual(claimedIds, ['s-main'], 'the live session gets the admin prompt immediately')
   assert.equal(db.prepare("SELECT role FROM session_space_links WHERE session_id = 's-main'").get().role, 'admin')
 
   const after = await request(route, { path: '/api/context-array/overview' })

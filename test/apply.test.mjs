@@ -377,3 +377,12 @@ test('the llm/stream listener records usage and passes chunks through', async (t
   assert.equal(records[0].cacheReadTokens, 90)
   assert.equal(records[0].usageSource, 'normalized-usage-chunk')
 })
+
+test('an admin session gets the admin L3 section at bootstrap', (t) => {
+  const { host } = setup(t, { adminSessionIds: ['session-1'] })
+  const [agentCreated] = host.listeners.get('agent/created') ?? []
+  agentCreated({ agent: host.agent, source: 'startup' })
+  const admin = host.agentSections.find((section) => section.name === 'context-array:l3-admin')
+  assert.equal(admin?.order, 250)
+  assert.match(admin?.text ?? '', /中央记忆管理员/)
+})

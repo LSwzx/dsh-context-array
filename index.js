@@ -217,6 +217,13 @@ export function apply(ctx, rawConfig = {}) {
       events,
       inboxTracker,
       updateChecker,
+      onAdminClaimed: (sessionId) => {
+        try {
+          registerAdminSection(ctx.get?.('agents')?.get?.(sessionId))
+        } catch (error) {
+          warn('admin-section')(error)
+        }
+      },
       persona: {
         mode: personaGuard.mode,
         tools: personaGuard.tools,
@@ -257,6 +264,29 @@ export function apply(ctx, rawConfig = {}) {
   const roleSections = new Map()
   /** Per-session persona sections (text provider reads the session/global row live). @type {Map<string, () => void>} */
   const personaSections = new Map()
+
+  /**
+   * Register the admin L3 section for one live agent.
+   *
+   * Called from the normal bootstrap path and again when the panel claims an already
+   * open session as the memory manager, so the newly appointed session gets the SOP
+   * on its next request instead of waiting for a restart. Idempotent per session.
+   */
+  function registerAdminSection(agent) {
+    if (!agent || roleSections.has(agent.id)) return
+    try {
+      roleSections.set(agent.id, [
+        agent.ctx.systemPrompt.section({
+          name: ADMIN_L3_SECTION,
+          order: ADMIN_L3_ORDER,
+          text: ADMIN_L3_TEXT,
+          interpolate: false,
+        }),
+      ])
+    } catch (error) {
+      warn('admin-section')(error)
+    }
+  }
   ctx.effect(
     () => () => {
       for (const dispose of agentSections.values()) {
@@ -396,16 +426,7 @@ export function apply(ctx, rawConfig = {}) {
       // M3: the central memory manager gets its own L3 section. Role comes from the
       // deployment allow-list or the frozen binding — never from the model.
       const isAdmin = config.adminSessionIds.includes(agent.id) || spaces.some((space) => space.role === 'admin')
-      if (isAdmin && !roleSections.has(agent.id)) {
-        roleSections.set(agent.id, [
-          agent.ctx.systemPrompt.section({
-            name: ADMIN_L3_SECTION,
-            order: ADMIN_L3_ORDER,
-            text: ADMIN_L3_TEXT,
-            interpolate: false,
-          }),
-        ])
-      }
+      if (isAdmin) registerAdminSection(agent)
 
       if (!config.bootstrapMessages) return
       if (source !== undefined && !BOOTSTRAP_SOURCES.has(source)) return

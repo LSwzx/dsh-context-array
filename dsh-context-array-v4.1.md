@@ -516,6 +516,7 @@ export class MemoryManagerDB {
 - 新增 `POST /admin/claim`：仅当没有有效管理员（配置 id 或 `role=admin` 绑定都指向已存在的会话）时开放；
   校验目标会话存在且为主会话，写入默认空间的 `role=admin` 绑定并记 `admin/claimed` 事件，之后永久 409。
 - `/overview` 增加 `admin` 状态；面板空间页新增「记忆管理员」卡片：无管理员时给 3 步向导，有管理员时显示是谁。
+- 认领后对**已在运行**的目标会话动态注册管理员 L3 段（order 250），下一轮即生效，避免“设了管理员但模型不知道”。
 - 随包 patch 的 `adminSessionIds` 清空，避免新装实例指向不存在的会话；本地开发实例改为 DB 绑定保留管理员。
 - 单测 228 项。
 
