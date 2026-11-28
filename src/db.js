@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS session_persona_snapshot (
   hash TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS persona_profile (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  text TEXT NOT NULL DEFAULT '',
+  updated_by TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS session_persona_profile (
+  session_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL DEFAULT '',
+  updated_by TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 /**
@@ -241,6 +255,98 @@ export function migrate(db) {
     );
   });
   return { schemaVersion: SCHEMA_VERSION };
+}
+
+/**
+ * Read the single global persona profile.
+ *
+ * The persona is global (one agent identity), written by the agent itself through
+ * `persona_write` and editable by the human in the panel.
+ *
+ * @param {any} db
+ * @returns {{ text: string, updatedBy: string | null, updatedAt: string | null }}
+ */
+export function getPersonaProfile(db) {
+  const row = db.prepare('SELECT text, updated_by, updated_at FROM persona_profile WHERE id = 1').get()
+  return {
+    text: typeof row?.text === 'string' ? row.text : '',
+    updatedBy: row?.updated_by ?? null,
+    updatedAt: row?.updated_at ?? null,
+  }
+}
+
+/**
+ * Replace the global persona text.
+ *
+ * @param {any} db
+ * @param {{ text: string, updatedBy?: string | null }} input
+ * @returns {{ text: string, updatedBy: string | null, updatedAt: string | null }}
+ */
+export function setPersonaProfile(db, { text, updatedBy = null } = {}) {
+  db.prepare(
+    `INSERT INTO persona_profile (id, text, updated_by, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_by = excluded.updated_by,
+                                   updated_at = CURRENT_TIMESTAMP`,
+  ).run(String(text ?? ''), updatedBy === null ? null : String(updatedBy))
+  return getPersonaProfile(db)
+}
+
+/**
+ * Read one session's own persona row (the AI writes this by default).
+ *
+ * @param {any} db
+ * @param {string} sessionId
+ * @returns {{ text: string, updatedBy: string | null, updatedAt: string | null } | null}
+ */
+export function getSessionPersonaProfile(db, sessionId) {
+  if (typeof sessionId !== 'string' || sessionId === '') return null
+  const row = db
+    .prepare('SELECT text, updated_by, updated_at FROM session_persona_profile WHERE session_id = ?')
+    .get(sessionId)
+  if (!row) return null
+  return {
+    text: typeof row.text === 'string' ? row.text : '',
+    updatedBy: row.updated_by ?? null,
+    updatedAt: row.updated_at ?? null,
+  }
+}
+
+/**
+ * Replace one session's persona row.
+ *
+ * @param {any} db
+ * @param {{ sessionId: string, text: string, updatedBy?: string | null }} input
+ */
+export function setSessionPersonaProfile(db, { sessionId, text, updatedBy = null } = {}) {
+  if (typeof sessionId !== 'string' || sessionId === '') throw new TypeError('setSessionPersonaProfile: sessionId required')
+  db.prepare(
+    `INSERT INTO session_persona_profile (session_id, text, updated_by, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, updated_by = excluded.updated_by,
+                                           updated_at = CURRENT_TIMESTAMP`,
+  ).run(sessionId, String(text ?? ''), updatedBy === null ? null : String(updatedBy))
+  return getSessionPersonaProfile(db, sessionId)
+}
+
+/**
+ * Effective persona for one session: its own row, else the global default row.
+ *
+ * @param {any} db
+ * @param {string} sessionId
+ */
+export function getEffectivePersona(db, sessionId) {
+  const own = getSessionPersonaProfile(db, sessionId)
+  if (own) return { ...own, scope: 'session' }
+  return { ...getPersonaProfile(db), scope: 'global' }
+}
+
+/** Every space id, for global persona trait aggregation. */
+export function listSpaceIds(db) {
+  try {
+    return db.prepare('SELECT id FROM memory_spaces ORDER BY id ASC').all().map((row) => row.id)
+  } catch {
+    return []
+  }
 }
 
 /**

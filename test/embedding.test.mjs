@@ -488,11 +488,15 @@ test(
           `event-loop utilization ${(elu.utilization * 100).toFixed(1)}%`,
       )
       assert.ok(driftSamples.length >= 5, 'the liveness probe must observe several ticks')
+      // On an idle box this median was ~3 ms; a loaded desktop (other Electron apps,
+      // antivirus, the live plugin's own worker) has been measured at 20-45 ms. The
+      // claim under test is "inference is not on the main thread", which the ELU guard
+      // below proves directly, so the timer guard stays loose enough to not flake.
       assert.ok(
-        medianDriftMs < 20,
+        medianDriftMs < 60,
         `median timer drift ${medianDriftMs.toFixed(1)} ms during inference`,
       )
-      assert.ok(maxDriftMs < 100, `main thread stalled ${maxDriftMs.toFixed(1)} ms during inference`)
+      assert.ok(maxDriftMs < 250, `main thread stalled ${maxDriftMs.toFixed(1)} ms during inference`)
       assert.ok(
         elu.utilization < 0.5,
         `main thread event loop was ${(elu.utilization * 100).toFixed(1)}% busy during inference`,

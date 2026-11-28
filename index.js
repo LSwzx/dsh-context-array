@@ -15,8 +15,8 @@ import { resolveConfig } from './src/config.js'
 import fs from 'node:fs'
 import {
   ensureDefaultSpace,
+  getEffectivePersona,
   getOrCreateL4Snapshot,
-  getOrCreatePersonaSnapshot,
   listPersonalityMemories,
   markBootstrapped,
   openStore,
@@ -40,6 +40,7 @@ import {
   withSalt,
 } from './src/prompt.js'
 import { buildPersonaText, createPersonaGuard } from './src/persona.js'
+import { createPersonaWriteTool } from './src/persona-tool.js'
 import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
 import { createEventLog } from './src/events.js'
@@ -147,6 +148,13 @@ export function apply(ctx, rawConfig = {}) {
     warn('memory-tools')(error)
   }
 
+  // The agent records its own persona; the human edits the same row in the panel.
+  try {
+    ctx.tools.register(createPersonaWriteTool({ db: store.db, warn: warn('persona-write') }))
+  } catch (error) {
+    warn('persona-write')(error)
+  }
+
   // Persona guard: watches external tool results for hijack attempts. The waterfall
   // listener always delegates to `next()`; it only records (observe) or adds a
   // reassertion context (enforce), so a tool result is never blocked here.
@@ -208,7 +216,7 @@ export function apply(ctx, rawConfig = {}) {
   const agentSections = new Map()
   /** Admin-role sections, keyed by session; same lifecycle rule. @type {Map<string, (() => void)[]>} */
   const roleSections = new Map()
-  /** Frozen personality sections, keyed by session. @type {Map<string, () => void>} */
+  /** Per-session persona sections (text provider reads the session/global row live). @type {Map<string, () => void>} */
   const personaSections = new Map()
   ctx.effect(
     () => () => {
@@ -244,12 +252,20 @@ export function apply(ctx, rawConfig = {}) {
 
   /** Withdraw one session's sections (agent disposal or plugin unload). */
   function releaseAgentSection(sessionId) {
-    for (const map of [agentSections, personaSections]) {
-      const entry = map.get(sessionId)
-      if (entry === undefined) continue
-      map.delete(sessionId)
+    const entry = agentSections.get(sessionId)
+    if (entry !== undefined) {
+      agentSections.delete(sessionId)
       try {
         entry()
+      } catch {
+        // Already withdrawn.
+      }
+    }
+    const persona = personaSections.get(sessionId)
+    if (persona !== undefined) {
+      personaSections.delete(sessionId)
+      try {
+        persona()
       } catch {
         // Already withdrawn.
       }
@@ -306,29 +322,6 @@ export function apply(ctx, rawConfig = {}) {
           ]
       const snapshot = getOrCreateL4Snapshot(store.db, { sessionId: agent.id, spaces, render: renderL4 })
 
-      // Persona-hijack protection: freeze this session's identity block from the
-      // deployment traits plus active `personality` memories. It sits between L1 and
-      // L3 (order 150) so it outranks every appended/tool-derived message.
-      const persona = getOrCreatePersonaSnapshot(store.db, {
-        sessionId: agent.id,
-        render: () =>
-          buildPersonaText({
-            traits: config.personaTraits,
-            memories: listPersonalityMemories(store.db, spaces.map((space) => space.id)),
-          }),
-      })
-      if (!personaSections.has(agent.id)) {
-        personaSections.set(
-          agent.id,
-          agent.ctx.systemPrompt.section({
-            name: PERSONA_SECTION,
-            order: PERSONA_ORDER,
-            text: persona.text,
-            interpolate: false,
-          }),
-        )
-      }
-
       if (!agentSections.has(agent.id)) {
         agentSections.set(
           agent.id,
@@ -336,6 +329,26 @@ export function apply(ctx, rawConfig = {}) {
             name: L4_SECTION,
             order: L4_ORDER,
             text: snapshot.text,
+            interpolate: false,
+          }),
+        )
+      }
+
+      // Persona: per-conversation identity. The text provider reads the session row
+      // (or the global fallback) on every assembly, so an AI write (`persona_write`) or
+      // a human edit in the panel applies from the next prompt without a frozen snapshot.
+      if (!personaSections.has(agent.id)) {
+        personaSections.set(
+          agent.id,
+          agent.ctx.systemPrompt.section({
+            name: PERSONA_SECTION,
+            order: PERSONA_ORDER,
+            text: () =>
+              buildPersonaText({
+                traits: config.personaTraits,
+                memories: listPersonalityMemories(store.db, spaces.map((space) => space.id)),
+                profile: getEffectivePersona(store.db, agent.id).text,
+              }),
             interpolate: false,
           }),
         )

@@ -36,6 +36,8 @@ const REQUIRED_TABLES = [
   'meta',
   'session_bootstrap',
   'session_persona_snapshot',
+  'persona_profile',
+  'session_persona_profile',
 ];
 const REQUIRED_INDEXES = [
   'idx_memories_space_valid',

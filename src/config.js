@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** Bumped together with the SQLite schema in src/db.js. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 import {
   DEFAULT_PERSONA_GUARD_MODE,

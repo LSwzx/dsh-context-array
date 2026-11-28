@@ -284,6 +284,8 @@ test('the picker lists persisted sessions (not only bound/live) with folded titl
       listSessions: async () => [
         { header: { id: 'persisted-1', createdAt: 100 }, live: false, persisted: true },
         { header: { id: 'live-2', createdAt: 200 }, live: true, persisted: true },
+        { header: { id: 'sub-1', createdAt: 300, origin: 'subagent' }, live: false, persisted: true },
+        { header: { id: 'child-1', createdAt: 400, parentSession: 'persisted-1' }, live: false, persisted: true },
       ],
       readTitleSnapshots: async (ids) =>
         ids.map((id) => ({
@@ -301,6 +303,11 @@ test('the picker lists persisted sessions (not only bound/live) with folded titl
   const live = overview.json.sessions.find((row) => row.sessionId === 'live-2')
   assert.equal(live.live, true)
   assert.equal(live.title, '当前会话')
+  assert.equal(
+    overview.json.sessions.some((row) => row.sessionId === 'sub-1' || row.sessionId === 'child-1'),
+    false,
+    'subagent sessions are not user sessions and stay out of the picker',
+  )
 })
 
 test('overview sessions include live agents and host titles for the picker', async (t) => {
@@ -333,6 +340,54 @@ test('the persona endpoint exposes guard mode, traits and personality memories',
   assert.equal(response.json.alerts.length, 1)
   assert.equal(response.json.memories.length, 1)
   assert.match(response.json.memories[0].content, /肥鱼/)
+  assert.deepEqual(response.json.profile, { text: '', updatedBy: null, updatedAt: null, scope: 'global' })
+})
+
+test('a human can edit persona for one chosen conversation', async (t) => {
+  const { route } = fixture(t)
+  const saved = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/persona',
+    headers: { 'x-context-array-ui': '1' },
+    body: { sessionId: 'session-picked', text: '这个对话里我叫鱼鱼。' },
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.profile.scope, 'session')
+  assert.equal(saved.json.profile.text, '这个对话里我叫鱼鱼。')
+
+  const read = await request(route, { path: '/api/context-array/persona?sessionId=session-picked' })
+  assert.equal(read.json.profile.scope, 'session')
+  assert.equal(read.json.profile.text, '这个对话里我叫鱼鱼。')
+  assert.equal(read.json.own.text, '这个对话里我叫鱼鱼。')
+
+  const other = await request(route, { path: '/api/context-array/persona?sessionId=session-other' })
+  assert.equal(other.json.profile.scope, 'global')
+  assert.equal(other.json.own, null)
+})
+
+test('a human can edit the global persona through the API', async (t) => {
+  const { route } = fixture(t)
+  const saved = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/persona',
+    headers: { 'x-context-array-ui': '1' },
+    body: { text: '我叫肥鱼，称呼用户为老板。' },
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.profile.text, '我叫肥鱼，称呼用户为老板。')
+  assert.equal(saved.json.profile.updatedBy, 'human')
+
+  const read = await request(route, { path: '/api/context-array/persona' })
+  assert.equal(read.json.profile.text, '我叫肥鱼，称呼用户为老板。')
+
+  const tooLong = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/persona',
+    headers: { 'x-context-array-ui': '1' },
+    body: { text: 'x'.repeat(4001) },
+  })
+  assert.equal(tooLong.status, 400)
+  assert.equal(tooLong.json.error, 'PERSONA_TOO_LONG')
 })
 
 test('memories support dimension filtering, paging and a total', async (t) => {

@@ -14,6 +14,12 @@ import {
   sendInbox,
 } from './inbox.js'
 import { getQueueItem, listQueueItems, queueStats, QUEUE_STATUSES } from './queue.js'
+import { getPersonaProfile, setPersonaProfile } from './db.js'
+import {
+  getEffectivePersona,
+  getSessionPersonaProfile,
+  setSessionPersonaProfile,
+} from './db.js'
 import {
   bindSessionToSpace,
   countActiveMemories,
@@ -135,6 +141,8 @@ async function listSessionsForPicker(ctx, db) {
   for (const record of records) {
     const id = record?.header?.id ?? record?.id
     if (!id) continue
+    // The panel is a human surface: subagent/delegated sessions are not user sessions.
+    if (record?.header?.origin === 'subagent' || record?.header?.parentSession) continue
     entries.set(id, {
       sessionId: id,
       links: bindings.get(id) ?? [],
@@ -247,13 +255,40 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
                 LIMIT 50`,
             )
             .all()
+          const sessionId = url.searchParams.get('sessionId') || ''
           return json(res, 200, {
             mode: persona?.mode ?? 'off',
             tools: persona?.tools ?? [],
             traits: persona?.traits ?? [],
+            sessionId: sessionId === '' ? null : sessionId,
+            profile: sessionId === '' ? { ...getPersonaProfile(db), scope: 'global' } : getEffectivePersona(db, sessionId),
+            own: sessionId === '' ? null : getSessionPersonaProfile(db, sessionId),
+            global: getPersonaProfile(db),
             memories,
             alerts: persona?.alerts ?? [],
           })
+        }
+        if (method === 'POST' && path === '/persona') {
+          const text = String(body.text ?? '')
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+          if (text.length > 4000) return json(res, 400, { error: 'PERSONA_TOO_LONG' })
+          const profile =
+            sessionId === ''
+              ? { ...setPersonaProfile(db, { text, updatedBy: 'human' }), scope: 'global' }
+              : { ...setSessionPersonaProfile(db, { sessionId, text, updatedBy: 'human' }), scope: 'session' }
+          try {
+            events?.append({
+              type: 'persona/updated',
+              by: 'human',
+              scope: profile.scope,
+              sessionId: sessionId === '' ? null : sessionId,
+              length: text.length,
+              at: new Date().toISOString(),
+            })
+          } catch {
+            // Observability only.
+          }
+          return json(res, 200, { profile })
         }
         if (method === 'GET' && path === '/health') {
           return json(res, 200, { ok: true, spaces: listSpacesDetailed(db).length, queue: queueStats(db) })

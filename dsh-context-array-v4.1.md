@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.4.5)
+# dsh-context-array 产品需求与技术架构文档 (v4.5.0)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,20 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.4.5 → v4.5.0（人格按对话保存、AI 自写、人类任选对话可改；选择器只列主会话，2026-11-28）**
+
+- **人格改为按对话**：新增 `session_persona_profile`（schema 5）与全局默认 `persona_profile`；
+  `persona_write` 默认写调用者自己的对话（`scope: global` 可写默认），生效来源按"会话行 → 全局行"回退。
+- **AI 默认自己写、人类可改**：面板「人格」页新增对话选择器（全局默认 + 主会话），可编辑文本域、保存，
+  并显示当前生效来源与"最近修改者（AI/你）/时间"；`POST /persona` 接受可选 `sessionId`。
+- 人格块由全局 section 改回**每会话 section**，但文本由 provider 每次装配读取（不再冻结快照），
+  因此编辑下一轮即生效；旧 `session_persona_snapshot` 仅保留兼容。
+- **会话选择器只列主会话**：`/overview.sessions` 过滤 `origin === 'subagent'` 与带 `parentSession` 的委托会话，
+  不再把子智能体/压缩金丝雀列出来；「人格」页的对话选择器同样只列主会话。
+- 单测 202 项（新增按对话人格、默认回退、主会话过滤用例）。
+
+**v4.4.4 → v4.4.5（会话选择器列出全部会话，2026-11-28）**
 
 **v4.4.4 → v4.4.5（会话选择器列出全部会话，2026-11-28）**
 
