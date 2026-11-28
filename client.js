@@ -364,7 +364,7 @@ window.__ModuleLoader__.load({
               { className: 'ca-card', style: { margin: '10px 14px 0' } },
               h('div', { className: 'ca-card-head' }, h('span', { className: 'ca-name' }, '新手引导'), h('button', { className: 'ca-btn', onClick: dismissGuide }, '知道了')),
               h('div', { className: 'ca-hint' }, '① 插件不会自动把任何会话绑定到空间：未绑定的会话默认使用「默认空间」，检索与提示词都照常工作。'),
-              h('div', { className: 'ca-hint' }, '② 需要按项目隔离时：在「空间」页新建空间，再把会话绑定到它（或在对话里用 memory_bind）。'),
+              h('div', { className: 'ca-hint' }, '② 需要按项目隔离时：在「空间」页新建空间，再从下拉里选择会话绑定到它（不需要输入 id；也可在对话里用 memory_bind）。'),
               h('div', { className: 'ca-hint' }, '③ 「记忆」页只读：按空间与维度查看有效记忆；人类没有修改权限，写入/失效只由记忆管理员在对话里完成。'),
               h('div', { className: 'ca-hint' }, '④ 「队列」只读，由记忆管理员在对话里领取/归档/拒绝；「留言箱」可发留言，勾选唤醒会开启对方一轮并有每小时限流。'),
               h('div', { className: 'ca-hint' }, '⑤ 「人格」页展示身份规则与投毒尝试记录：插件会冻结人格块并监视网页/搜索类工具结果，外部内容改不了人格。'),
@@ -430,7 +430,6 @@ window.__ModuleLoader__.load({
       const [deleteHint, setDeleteHint] = React.useState('');
       const [bindSession, setBindSession] = React.useState('');
       const [bindRole, setBindRole] = React.useState('main');
-      const [otherFilter, setOtherFilter] = React.useState('');
 
       function beginEdit() {
         setEditName(selected ? selected.name : '');
@@ -442,16 +441,24 @@ window.__ModuleLoader__.load({
       function deleteReason(space) {
         if (!space) return '';
         if (space.id === defaultSpaceId) return '默认空间由配置 spaceId 指定，不可删除。';
-        if (space.memories > 0) return '该空间还有 ' + space.memories + ' 条有效记忆，需由记忆管理员在对话里处理（人类不能直接删除记忆）。';
+        if (space.memories > 0) {
+          return '该空间还有 ' + space.memories + ' 条有效记忆。请记忆管理员先在对话里用 supersedesId 把它们全部取代，之后这里才能删除（删除时会一并清理已取代的旧行）。';
+        }
         return '';
       }
 
       if (!selected) return h('div', { className: 'ca-list', style: { padding: 14 } }, h('div', { className: 'ca-empty' }, '正在读取空间…'));
 
       const boundRows = bindings.filter((row) => row.space_id === selected.id);
-      const boundIds = new Set(boundRows.map((row) => row.session_id));
-      const otherRows = sessions.filter((row) => !boundIds.has(row.sessionId));
-      const filteredOther = otherRows.filter((row) => otherFilter === '' || row.sessionId.startsWith(otherFilter.trim()));
+
+      /** Human label for a session: host title when available, else an id prefix. */
+      function sessionLabel(rowOrId) {
+        const row = typeof rowOrId === 'string' ? sessions.find((entry) => entry.sessionId === rowOrId) : rowOrId;
+        if (!row) return String(rowOrId ?? '').slice(0, 8);
+        const name = row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8);
+        const links = Array.isArray(row.links) && row.links.length > 0 ? ' · ' + row.links.map((link) => link.spaceId + '/' + link.role).join('、') : '';
+        return name + links + (row.live ? ' · 在线' : '');
+      }
 
       return h(
         React.Fragment,
@@ -594,7 +601,7 @@ window.__ModuleLoader__.load({
                     h(
                       'div',
                       { className: 'ca-row', style: { justifyContent: 'space-between' }, key: row.session_id + row.space_id },
-                      h('span', { className: 'ca-muted' }, row.session_id.slice(0, 8) + ' · ' + row.role),
+                      h('span', { className: 'ca-muted' }, sessionLabel(row.session_id) + ' · ' + row.role),
                       h(
                         'div',
                         { className: 'ca-row' },
@@ -615,7 +622,7 @@ window.__ModuleLoader__.load({
                       ),
                     ),
                   ),
-              h('div', { className: 'ca-hint' }, 'ⓘ 面板读不到会话标题，只显示 id 前缀；悬停可看完整 id。要把「当前会话」绑到本空间，请在对话里用 memory_bind。'),
+              h('div', { className: 'ca-hint' }, 'ⓘ 会话标题来自宿主的 session-title 服务；没有标题时显示 id 前缀。要把「当前会话」绑到本空间，请在对话里用 memory_bind。'),
             ),
             h(
               'div',
@@ -624,7 +631,19 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'ca-row' },
-                h('input', { className: 'ca-input', placeholder: '会话 id', value: bindSession, onChange: (e) => setBindSession(e.target.value), 'aria-label': '会话 id' }),
+                h(
+                  'select',
+                  {
+                    className: 'ca-input',
+                    style: { flex: 1, minWidth: 220 },
+                    value: bindSession || (sessions[0] ? sessions[0].sessionId : ''),
+                    onChange: (e) => setBindSession(e.target.value),
+                    'aria-label': '选择会话',
+                  },
+                  sessions.length === 0
+                    ? h('option', { value: '' }, '没有可选择的会话')
+                    : sessions.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabel(row))),
+                ),
                 h(
                   'select',
                   { className: 'ca-input', value: bindRole, onChange: (e) => setBindRole(e.target.value), 'aria-label': '绑定角色' },
@@ -635,50 +654,29 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     className: 'ca-btn',
-                    disabled: busy,
+                    disabled: busy || sessions.length === 0,
                     onClick: () =>
                       act('绑定', async () => {
-                        const sessionId = bindSession.trim();
+                        const sessionId = bindSession || (sessions[0] ? sessions[0].sessionId : '');
+                        if (!sessionId) return '没有可选择的会话';
                         await call('/bind', { method: 'POST', body: { sessionId, spaceId: selected.id, role: bindRole } });
-                        setBindSession('');
-                        return sessionId.slice(0, 8) + ' 已绑定';
+                        return sessionLabel(sessionId) + ' 已绑定';
                       }),
                   },
                   '绑定',
                 ),
               ),
+              h('div', { className: 'ca-hint' }, '从下拉里选择会话即可，不需要手动输入 id。'),
               h('div', { className: 'ca-hint' }, '绑定后该会话可检索本空间，但其 L4 规则不会变化。'),
               h('div', { className: 'ca-hint' }, '管理员身份由部署配置（adminSessionIds）授予，面板不提供升降级。'),
-              otherRows.length === 0
-                ? null
-                : h(
-                    React.Fragment,
-                    null,
-                    h('div', { className: 'ca-hint' }, '其它已知会话（未绑定本空间）：'),
-                    h('input', { className: 'ca-input', placeholder: '按 id 过滤…', value: otherFilter, onChange: (e) => setOtherFilter(e.target.value), 'aria-label': '过滤会话' }),
-                    filteredOther.length === 0
-                      ? h('div', { className: 'ca-empty' }, '没有匹配的会话。')
-                      : filteredOther.map((row) =>
-                          h(
-                            'div',
-                            { className: 'ca-row', style: { justifyContent: 'space-between' }, key: row.sessionId },
-                            h('span', { className: 'ca-muted' }, row.sessionId.slice(0, 8) + ' · ' + row.links.map((link) => link.spaceId + '/' + link.role).join('、')),
-                            h(
-                              'div',
-                              { className: 'ca-row' },
-                              h('button', { className: 'ca-btn is-link', onClick: () => copy('会话 id', row.sessionId) }, '复制 id'),
-                              h('button', { className: 'ca-btn', disabled: busy, onClick: () => setBindSession(row.sessionId) }, '填入'),
-                            ),
-                          ),
-                        ),
-                  ),
             ),
             h(
               'div',
               { className: 'ca-card' },
-              h('div', { className: 'ca-name' }, '危险操作'),
-              h('div', { className: 'ca-hint' }, deleteReason(selected)),
-              confirmDelete
+              h('div', { className: 'ca-name' }, '删除空间'),
+              deleteReason(selected)
+                ? h('div', { className: 'ca-hint' }, deleteReason(selected))
+                : confirmDelete
                 ? h(
                     React.Fragment,
                     null,
@@ -708,7 +706,7 @@ window.__ModuleLoader__.load({
                                     ' 条；面板暂时无法清理这些旧行，需要后端按新口径清理后才能删除空间。',
                                 );
                               } else if (payload.reason === 'SPACE_NOT_EMPTY') {
-                                setDeleteHint('该空间还有 ' + String(payload.memories ?? selected.memories) + ' 条有效记忆，先到「记忆」页删除。');
+                                setDeleteHint('该空间还有 ' + String(payload.memories ?? selected.memories) + ' 条有效记忆；请记忆管理员先用 supersedesId 取代它们。');
                               } else {
                                 setDeleteHint(error.message);
                               }
@@ -1091,6 +1089,12 @@ window.__ModuleLoader__.load({
       const [loadError, setLoadError] = React.useState('');
       const [status, setStatus] = React.useState('pending');
 
+      const sessionName = (id) => {
+        if (!id) return '面板';
+        const row = sessions.find((entry) => entry.sessionId === id);
+        return row && row.title ? String(row.title).slice(0, 20) : String(id).slice(0, 8);
+      };
+
       async function loadInbox() {
         try {
           const data = await call('/inbox?status=' + status);
@@ -1137,7 +1141,7 @@ window.__ModuleLoader__.load({
                     h(
                       'div',
                       { className: 'ca-card-head' },
-                      h('span', { className: 'ca-muted' }, (row.source_session_id || '面板').slice(0, 8) + ' → 发往 ' + (row.target_session_id || '').slice(0, 8) + ' · ' + formatTime(row.created_at)),
+                      h('span', { className: 'ca-muted' }, sessionName(row.source_session_id) + ' → 发往 ' + sessionName(row.target_session_id) + ' · ' + formatTime(row.created_at)),
                       h(
                         'button',
                         {
@@ -1175,17 +1179,37 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'ca-row' },
-                h('input', { className: 'ca-input', placeholder: '目标会话 id', value: inboxTarget, onChange: (e) => setInboxTarget(e.target.value), 'aria-label': '目标会话' }),
+                h(
+                  'select',
+                  {
+                    className: 'ca-input',
+                    style: { minWidth: 200 },
+                    value: inboxTarget || (sessions[0] ? sessions[0].sessionId : ''),
+                    onChange: (e) => setInboxTarget(e.target.value),
+                    'aria-label': '目标会话',
+                  },
+                  sessions.length === 0
+                    ? h('option', { value: '' }, '没有可选择的会话')
+                    : sessions.map((row) =>
+                        h(
+                          'option',
+                          { key: row.sessionId, value: row.sessionId },
+                          (row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8)) + (row.live ? ' · 在线' : ''),
+                        ),
+                      ),
+                ),
                 h('input', { className: 'ca-input', style: { flex: 1 }, placeholder: '内容', value: inboxContent, onChange: (e) => setInboxContent(e.target.value), 'aria-label': '留言内容' }),
                 h('label', { className: 'ca-muted' }, h('input', { type: 'checkbox', checked: inboxWake, onChange: (e) => setInboxWake(e.target.checked) }), ' 唤醒'),
                 h(
                   'button',
                   {
                     className: 'ca-btn',
-                    disabled: busy,
+                    disabled: busy || sessions.length === 0,
                     onClick: () =>
                       act('发送留言', async () => {
-                        const data = await call('/inbox/send', { method: 'POST', body: { targetSessionId: inboxTarget.trim(), content: inboxContent, wake: inboxWake } });
+                        const targetSessionId = inboxTarget || (sessions[0] ? sessions[0].sessionId : '');
+                        if (!targetSessionId) return '没有可选择的会话';
+                        const data = await call('/inbox/send', { method: 'POST', body: { targetSessionId, content: inboxContent, wake: inboxWake } });
                         setInboxContent('');
                         await loadInbox();
                         return DELIVERY_TEXT[data.delivery.mode] || data.delivery.mode;
@@ -1194,14 +1218,7 @@ window.__ModuleLoader__.load({
                   '发送',
                 ),
               ),
-              sessions.length === 0
-                ? null
-                : h('div', { className: 'ca-row' },
-                    h('span', { className: 'ca-muted' }, '已知会话：'),
-                    sessions.map((row) =>
-                      h('button', { key: row.sessionId, className: 'ca-btn', title: row.sessionId, onClick: () => setInboxTarget(row.sessionId) }, row.sessionId.slice(0, 8)),
-                    ),
-                  ),
+              h('div', { className: 'ca-hint' }, '从下拉里选择目标会话即可，不需要手动输入 id。'),
             ),
           ),
         ),

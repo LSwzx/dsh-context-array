@@ -115,6 +115,44 @@ export function registerRoute(ctx, route, { events = null, warn = () => {} } = {
   return attach(web)
 }
 
+/** Sessions for the panel pickers: bound sessions plus live agents, with titles when the
+ * host's session-title service can fold one. */
+function listSessionsForPicker(ctx, db) {
+  const entries = new Map()
+  for (const row of listKnownSessions(db)) entries.set(row.sessionId, { ...row, live: false, title: null })
+  let live = []
+  try {
+    live = ctx.get?.('agents')?.list?.() ?? []
+  } catch {
+    live = []
+  }
+  const titleService = (() => {
+    try {
+      return ctx.get?.('sessionTitle') ?? null
+    } catch {
+      return null
+    }
+  })()
+  for (const agent of live) {
+    let title = null
+    try {
+      title = titleService?.get?.(agent.session)?.title ?? null
+    } catch {
+      title = null
+    }
+    const entry = entries.get(agent.id)
+    if (entry) {
+      entry.live = true
+      entry.title = title
+    } else {
+      entries.set(agent.id, { sessionId: agent.id, links: [], live: true, title })
+    }
+  }
+  return [...entries.values()].sort(
+    (left, right) => Number(right.live) - Number(left.live) || left.sessionId.localeCompare(right.sessionId),
+  )
+}
+
 /**
  * Register the API route.
  *
@@ -164,7 +202,7 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
           return json(res, 200, {
             spaces: listSpacesDetailed(db),
             bindings: listBindings(db),
-            sessions: listKnownSessions(db),
+            sessions: listSessionsForPicker(ctx, db),
             queue: queueStats(db),
             wakeMaxPerHour: config.wakeMaxPerHour,
             defaultSpaceId: config.spaceId,

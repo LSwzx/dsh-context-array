@@ -298,6 +298,7 @@ export function listSpacesDetailed(db)          // + memories / sessions counts
 export function createSpace(db, { name, description })      // id = space-<8 hex>
 export function updateSpace(db, { id, name, description })
 export function deleteSpace(db, id, { defaultSpaceId })   // refuses the configured default and spaces with ACTIVE memories;
+                                                          // the panel drives the supersede-then-delete flow
                                                 // otherwise clears memories (incl. superseded), inbox and links
 export function countActiveMemories(db, spaceId, dimension?)
 export function listMemories(db, { spaceId, dimension, limit, offset, includeSuperseded })
@@ -333,7 +334,9 @@ export const API_PREFIX = '/api/context-array'
 export function registerRoute(ctx, route, { events, warn })  // ctx.inject(["webServer"]) + http-api/* events
 export function registerContextArrayApi({ ctx, db, config, warn, events, persona })  // -> disposer
 ```
-Routes: `GET /health`, `GET /overview`, `POST /spaces/create|/spaces/update|/spaces/delete`,
+Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionId, links, live, title }]`, queue,
+`wakeMaxPerHour`, defaultSpaceId; titles come from the host `sessionTitle` service and stay null
+without it), `POST /spaces/create|/spaces/update|/spaces/delete`,
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
 `POST /memories/delete` (always `403 MEMORY_READ_ONLY`: the UI is read-only for memory),
 `POST /bind|/unbind`,

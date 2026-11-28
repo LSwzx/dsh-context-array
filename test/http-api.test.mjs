@@ -11,7 +11,7 @@ import { resolveConfig } from '../src/config.js'
 import { ensureDefaultSpace, openStore } from '../src/db.js'
 import { registerContextArrayApi } from '../src/http-api.js'
 
-function fixture(t) {
+function fixture(t, services = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-api-'))
   const config = resolveConfig({ dataDir })
   const opened = openStore(config)
@@ -19,7 +19,10 @@ function fixture(t) {
 
   let route = null
   const ctx = {
-    get: (name) => (name === 'webServer' ? { register: (registered) => ((route = registered), () => {}) } : undefined),
+    get: (name) =>
+      name === 'webServer'
+        ? { register: (registered) => ((route = registered), () => {}) }
+        : services[name],
   }
   registerContextArrayApi({
     ctx,
@@ -273,6 +276,19 @@ test('a duplicate inbox send reports duplicate instead of delivering twice', asy
   assert.equal(second.json.deduped, true)
   assert.equal(second.json.delivery.mode, 'duplicate')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1)
+})
+
+test('overview sessions include live agents and host titles for the picker', async (t) => {
+  const liveAgent = { id: 'live-1', session: {} }
+  const { route } = fixture(t, {
+    agents: { list: () => [liveAgent] },
+    sessionTitle: { get: () => ({ title: '缓存实验' }) },
+  })
+  const overview = await request(route, { path: '/api/context-array/overview' })
+  assert.equal(overview.status, 200)
+  const live = overview.json.sessions.find((row) => row.sessionId === 'live-1')
+  assert.equal(live.live, true)
+  assert.equal(live.title, '缓存实验')
 })
 
 test('the persona endpoint exposes guard mode, traits and personality memories', async (t) => {
