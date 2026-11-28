@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-array",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Locally hosted five-dimension memory and KV-cache-first context assembly for DeepSeek Harness.",

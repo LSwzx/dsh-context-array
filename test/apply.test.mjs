@@ -103,8 +103,11 @@ test('apply registers L1/L3 globally and one L4 section per session', (t) => {
   assert.equal(typeof agentCreated, 'function')
   agentCreated({ agent: host.agent, source: 'startup' })
 
-  assert.equal(host.agentSections.length, 1)
-  const l4 = host.agentSections[0]
+  assert.equal(host.agentSections.length, 2)
+  const persona = host.agentSections.find((section) => section.name === 'context-array:personality')
+  assert.equal(persona.order, 150)
+  assert.match(persona.text, /<context-array-personality>/)
+  const l4 = host.agentSections.find((section) => section.name === 'context-array:l4')
   assert.equal(l4.name, 'context-array:l4')
   assert.equal(l4.order, 300)
   assert.match(l4.text, /<context-array-spaces>/)
@@ -123,12 +126,12 @@ test('L4 text is snapshotted once and replayed byte-for-byte', (t) => {
   const [agentCreated] = host.listeners.get('agent/created') ?? []
 
   agentCreated({ agent: host.agent, source: 'startup' })
-  const first = host.agentSections[0].text
+  const first = host.agentSections.find((section) => section.name === 'context-array:l4').text
 
   // A second event on the same session reuses the section and the snapshot.
   agentCreated({ agent: host.agent, source: 'resume' })
-  assert.equal(host.agentSections.length, 1, 'the section is registered once per session')
-  assert.equal(host.agentSections[0].text, first)
+  assert.equal(host.agentSections.length, 2, 'the sections are registered once per session')
+  assert.equal(host.agentSections.find((section) => section.name === 'context-array:l4').text, first)
 
   // Editing the space row afterwards cannot change the frozen snapshot.
   const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
@@ -180,7 +183,7 @@ test('unloading the plugin withdraws the agent-scoped L4 section', (t) => {
 
   const [agentCreated] = host.listeners.get('agent/created') ?? []
   agentCreated({ agent: host.agent, source: 'startup' })
-  assert.equal(host.agentSections.length, 1)
+  assert.equal(host.agentSections.length, 2)
 
   // Cordis unwinds a fiber's effects in reverse order; doing the same here
   // proves the agent-scoped registration is owned by this plugin fiber.
@@ -199,7 +202,7 @@ test('a second bootstrap for the same session does not duplicate the L4 section'
   const [agentCreated] = host.listeners.get('agent/created') ?? []
   agentCreated({ agent: host.agent, source: 'startup' })
   agentCreated({ agent: host.agent, source: 'startup' })
-  assert.equal(host.agentSections.length, 1)
+  assert.equal(host.agentSections.length, 2)
 })
 
 test('agents already live at activation are bootstrapped without agent/created', (t) => {
@@ -228,9 +231,9 @@ test('agents already live at activation are bootstrapped without agent/created',
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
-  assert.equal(live.sections.length, 1)
-  assert.equal(live.sections[0].name, 'context-array:l4')
-  assert.match(live.sections[0].text, /space: space-default/)
+  assert.equal(live.sections.length, 2)
+  assert.equal(live.sections.find((section) => section.name === 'context-array:l4').name, 'context-array:l4')
+  assert.match(live.sections.find((section) => section.name === 'context-array:l4').text, /space: space-default/)
   assert.equal(live.injected.length, 1)
   assert.match(live.injected[0].content[0].text, /<context-array-bootstrap>/)
 })

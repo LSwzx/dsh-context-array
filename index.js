@@ -16,6 +16,8 @@ import fs from 'node:fs'
 import {
   ensureDefaultSpace,
   getOrCreateL4Snapshot,
+  getOrCreatePersonaSnapshot,
+  listPersonalityMemories,
   markBootstrapped,
   openStore,
 } from './src/db.js'
@@ -31,10 +33,13 @@ import {
   L3_TEXT,
   L4_ORDER,
   L4_SECTION,
+  PERSONA_ORDER,
+  PERSONA_SECTION,
   renderBootstrapSection,
   renderL4,
   withSalt,
 } from './src/prompt.js'
+import { buildPersonaText, createPersonaGuard } from './src/persona.js'
 import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
 import { createEventLog } from './src/events.js'
@@ -140,10 +145,27 @@ export function apply(ctx, rawConfig = {}) {
     warn('memory-tools')(error)
   }
 
+  // Persona guard: watches external tool results for hijack attempts. The waterfall
+  // listener always delegates to `next()`; it only records (observe) or adds a
+  // reassertion context (enforce), so a tool result is never blocked here.
+  const personaGuard = createPersonaGuard({ config, events, warn: warn('persona-guard') })
+  ctx.on('tools/post-execute', (exec, result, next) => personaGuard.handle(exec, result, next))
+
   // M4: the sidebar panel's Host API. Optional: deployments without a web server
   // simply never expose the panel's data.
   try {
-    const disposeApi = registerContextArrayApi({ ctx, db: store.db, config, warn: warn('http-api') })
+    const disposeApi = registerContextArrayApi({
+      ctx,
+      db: store.db,
+      config,
+      warn: warn('http-api'),
+      persona: {
+        mode: personaGuard.mode,
+        tools: personaGuard.tools,
+        alerts: personaGuard.alerts,
+        traits: config.personaTraits,
+      },
+    })
     ctx.effect(() => disposeApi, 'context-array:http-api')
   } catch (error) {
     warn('http-api')(error)
@@ -175,6 +197,8 @@ export function apply(ctx, rawConfig = {}) {
   const agentSections = new Map()
   /** Admin-role sections, keyed by session; same lifecycle rule. @type {Map<string, (() => void)[]>} */
   const roleSections = new Map()
+  /** Frozen personality sections, keyed by session. @type {Map<string, () => void>} */
+  const personaSections = new Map()
   ctx.effect(
     () => () => {
       for (const dispose of agentSections.values()) {
@@ -195,22 +219,38 @@ export function apply(ctx, rawConfig = {}) {
         }
       }
       roleSections.clear()
+      for (const dispose of personaSections.values()) {
+        try {
+          dispose?.()
+        } catch {
+          // Same as above.
+        }
+      }
+      personaSections.clear()
     },
     'context-array:agent-sections',
   )
 
   /** Withdraw one session's sections (agent disposal or plugin unload). */
   function releaseAgentSection(sessionId) {
-    for (const map of [agentSections, roleSections]) {
+    for (const map of [agentSections, personaSections]) {
       const entry = map.get(sessionId)
       if (entry === undefined) continue
       map.delete(sessionId)
-      for (const dispose of Array.isArray(entry) ? entry : [entry]) {
-        try {
-          dispose()
-        } catch {
-          // Already withdrawn.
-        }
+      try {
+        entry()
+      } catch {
+        // Already withdrawn.
+      }
+    }
+    const roleEntry = roleSections.get(sessionId)
+    if (roleEntry === undefined) return
+    roleSections.delete(sessionId)
+    for (const dispose of roleEntry) {
+      try {
+        dispose()
+      } catch {
+        // Already withdrawn.
       }
     }
   }
@@ -241,6 +281,29 @@ export function apply(ctx, rawConfig = {}) {
         ? bound
         : [{ id: config.spaceId, name: config.spaceName, description: config.spaceRules, role: 'main', implicit: true }]
       const snapshot = getOrCreateL4Snapshot(store.db, { sessionId: agent.id, spaces, render: renderL4 })
+
+      // Persona-hijack protection: freeze this session's identity block from the
+      // deployment traits plus active `personality` memories. It sits between L1 and
+      // L3 (order 150) so it outranks every appended/tool-derived message.
+      const persona = getOrCreatePersonaSnapshot(store.db, {
+        sessionId: agent.id,
+        render: () =>
+          buildPersonaText({
+            traits: config.personaTraits,
+            memories: listPersonalityMemories(store.db, spaces.map((space) => space.id)),
+          }),
+      })
+      if (!personaSections.has(agent.id)) {
+        personaSections.set(
+          agent.id,
+          agent.ctx.systemPrompt.section({
+            name: PERSONA_SECTION,
+            order: PERSONA_ORDER,
+            text: persona.text,
+            interpolate: false,
+          }),
+        )
+      }
 
       if (!agentSections.has(agent.id)) {
         agentSections.set(

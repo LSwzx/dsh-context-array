@@ -132,6 +132,13 @@ CREATE TABLE IF NOT EXISTS session_bootstrap (
   session_id TEXT PRIMARY KEY,
   bootstrapped_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS session_persona_snapshot (
+  session_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `;
 
 /**
@@ -234,6 +241,63 @@ export function migrate(db) {
     );
   });
   return { schemaVersion: SCHEMA_VERSION };
+}
+
+/**
+ * Freeze one session's personality block.
+ *
+ * Same contract as the L4 snapshot: the first render is stored and reused byte-for-byte
+ * so the persona section cannot churn the cache and cannot be rewritten mid-session by
+ * anything a tool returns.
+ *
+ * @param {{ sessionId: string, render: () => string }} input
+ * @returns {{ text: string, hash: string, created: boolean }}
+ */
+export function getOrCreatePersonaSnapshot(db, { sessionId, render } = {}) {
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    throw new TypeError('getOrCreatePersonaSnapshot: sessionId must be a non-empty string');
+  }
+  if (typeof render !== 'function') {
+    throw new TypeError('getOrCreatePersonaSnapshot: render must be a function');
+  }
+  const select = db.prepare('SELECT text, hash FROM session_persona_snapshot WHERE session_id = ?');
+  const existing = select.get(sessionId);
+  if (existing) return { text: existing.text, hash: existing.hash, created: false };
+
+  const text = render();
+  if (typeof text !== 'string') {
+    throw new TypeError('getOrCreatePersonaSnapshot: render() must return a string');
+  }
+  const result = db
+    .prepare('INSERT OR IGNORE INTO session_persona_snapshot(session_id, text, hash) VALUES (?, ?, ?)')
+    .run(sessionId, text, sha256(text));
+  const stored = select.get(sessionId);
+  return { text: stored.text, hash: stored.hash, created: result.changes === 1 };
+}
+
+/**
+ * Active `personality` memories across the given spaces, oldest first.
+ *
+ * @param {any} db
+ * @param {readonly string[]} spaceIds
+ * @returns {string[]}
+ */
+export function listPersonalityMemories(db, spaceIds) {
+  const ids = Array.isArray(spaceIds) ? spaceIds.filter((id) => typeof id === 'string' && id !== '') : [];
+  if (ids.length === 0) return [];
+  try {
+    return db
+      .prepare(
+        `SELECT content FROM memories
+          WHERE dimension = 'personality' AND superseded_by IS NULL
+            AND space_id IN (${ids.map(() => '?').join(',')})
+          ORDER BY seq ASC`,
+      )
+      .all(...ids)
+      .map((row) => row.content);
+  } catch {
+    return [];
+  }
 }
 
 /**

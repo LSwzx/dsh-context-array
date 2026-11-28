@@ -9,7 +9,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** Bumped together with the SQLite schema in src/db.js. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+import {
+  DEFAULT_PERSONA_GUARD_MODE,
+  DEFAULT_PERSONA_GUARD_TOOLS,
+  PERSONA_GUARD_MODES,
+} from './persona.js';
 
 export const DEFAULT_SPACE_ID = 'space-default';
 export const DEFAULT_SPACE_NAME = 'Default space';
@@ -131,6 +137,19 @@ export function resolveConfig(raw) {
       Number.isSafeInteger(input.wakeMaxPerHour) && input.wakeMaxPerHour > 0
         ? input.wakeMaxPerHour
         : 10,
+    // Persona-hijack protection (see src/persona.js).
+    personaGuard: PERSONA_GUARD_MODES.includes(input.personaGuard)
+      ? input.personaGuard
+      : DEFAULT_PERSONA_GUARD_MODE,
+    personaTraits: Array.isArray(input.personaTraits)
+      ? input.personaTraits
+          .filter((value) => typeof value === 'string' && value.trim() !== '')
+          .map((value) => value.trim())
+      : [],
+    personaGuardTools:
+      Array.isArray(input.personaGuardTools) && input.personaGuardTools.length > 0
+        ? input.personaGuardTools.filter((value) => typeof value === 'string' && value.trim() !== '')
+        : [...DEFAULT_PERSONA_GUARD_TOOLS],
     spaceId: stringOr(input.spaceId, DEFAULT_SPACE_ID),
     spaceName: stringOr(input.spaceName, DEFAULT_SPACE_NAME),
     spaceRules: stringOr(input.spaceRules, DEFAULT_SPACE_RULES),

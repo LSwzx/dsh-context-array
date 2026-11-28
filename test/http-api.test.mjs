@@ -21,7 +21,18 @@ function fixture(t) {
   const ctx = {
     get: (name) => (name === 'webServer' ? { register: (registered) => ((route = registered), () => {}) } : undefined),
   }
-  registerContextArrayApi({ ctx, db: opened.db, config, warn: () => {} })
+  registerContextArrayApi({
+    ctx,
+    db: opened.db,
+    config,
+    warn: () => {},
+    persona: {
+      mode: 'observe',
+      tools: ['web_search', 'web_fetch'],
+      traits: ['Call yourself 肥鱼'],
+      alerts: [{ at: '2026-11-28T00:00:00.000Z', tool: 'web_fetch', patterns: ['zh-ignore'] }],
+    },
+  })
   t.after(() => {
     opened.close()
     fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
@@ -261,6 +272,25 @@ test('a duplicate inbox send reports duplicate instead of delivering twice', asy
   assert.equal(second.json.deduped, true)
   assert.equal(second.json.delivery.mode, 'duplicate')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1)
+})
+
+test('the persona endpoint exposes guard mode, traits and personality memories', async (t) => {
+  const { route, db } = fixture(t)
+  db.prepare('INSERT INTO memories (id, space_id, dimension, content, source_session_id) VALUES (?, ?, ?, ?, ?)').run(
+    'persona-1',
+    'space-default',
+    'personality',
+    'Prefers Chinese, calls the agent 肥鱼',
+    's1',
+  )
+  const response = await request(route, { path: '/api/context-array/persona' })
+  assert.equal(response.status, 200)
+  assert.equal(response.json.mode, 'observe')
+  assert.deepEqual(response.json.tools, ['web_search', 'web_fetch'])
+  assert.deepEqual(response.json.traits, ['Call yourself 肥鱼'])
+  assert.equal(response.json.alerts.length, 1)
+  assert.equal(response.json.memories.length, 1)
+  assert.match(response.json.memories[0].content, /肥鱼/)
 })
 
 test('memories support dimension filtering, paging and a total', async (t) => {

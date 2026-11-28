@@ -52,7 +52,8 @@
 | 检索工具 | `src/memory-tool.js` | `memory_search(query, limit?)`：身份取宿主注入的 `exec.agent.id`，空间归属查 `session_space_links`，模型不能指定 session/space。 |
 | 记忆管理员 | `src/queue.js`、`src/memory-tools.js`、`src/prompt.js` | `memory_propose` 任何会话只入队；`memory_queue_claim` / `memory_archive` / `memory_queue_settle` / `memory_queue_stats` 仅管理员。队列原子领取、过期接管、重试上限、小时桶去重；归档本地算 embedding、校验绑定空间、取代失败整体回滚；管理员会话额外注入防注入 L3 段。 |
 | 留言箱与多空间 | `src/inbox.js`、`src/spaces.js`、`src/http-api.js` | `inbox_send(wake?)` 排队走 `agent.inject`（不唤醒），唤醒走 `agent.followup` 并受每小时 10 次限流（超限降级排队）；工具 `memory_bind` / `memory_unbind` / `inbox_list` / `inbox_ack`。空间增删改查、绑定、记忆浏览/删除经 `/api/context-array`（读 loopback-only，写需 `x-context-array-ui: 1`）。 |
-| 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板四个页签（空间 / 记忆 / 队列 / 留言箱）；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
+| 人格劫持防护 | `src/persona.js`、`src/db.js`、`index.js` | 冻结人格块（section order 150，L1↔L3）：固定身份规则 + `personaTraits` + 有效 `personality` 记忆，每会话首次渲染后逐字节复用；`tools/post-execute` 监视 `web_search`/`web_fetch` 的文本，12 条中英规则命中后记 `persona/hijack-suspected`，`enforce` 模式追加 `<persona-guard>` 提醒（不阻断工具结果）。 |
+| 侧边栏面板 | `client.js` | 左侧边栏图标「记忆」+ 主面板五个页签（空间 / 记忆 / 队列 / 留言箱 / 人格）；纯手写 bundle，无构建步骤；只用 `--dsw-alias-*` 主题 token。 |
 
 ## 三条最容易搞混的口径
 
@@ -109,6 +110,9 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `queueStaleMinutes` | `10` | 领取超过该分钟的 processing 行回到 pending |
 | `queueMaxRetries` | `3` | 重试达到该值的 pending 行置 failed |
 | `wakeMaxPerHour` | `10` | 同一目标会话每小时最多被唤醒次数（超限降级为排队） |
+| `personaGuard` | `observe` | `off` 关闭；`observe` 只记录投毒尝试；`enforce` 记录并在该步追加保持人格的提醒 |
+| `personaTraits` | `[]` | 部署级人格特征（每行一条），与新会话冻结的人格块一起注入 |
+| `personaGuardTools` | `["web_search","web_fetch"]` | 监视哪些工具的外部结果 |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它
 > 关掉，或把本项设为 `off`**，否则两个实现者会冲突（插件会记 `compaction/provider-conflict`，
@@ -117,7 +121,7 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 ## 验证
 
 ```powershell
-node --test                              # 全仓单元 + 接线测试（122 项）
+node --test                              # 全仓单元 + 接线测试（182 项）
 node docs/analyze-usage.mjs              # 双轨指标 + TTL 空档 + 压缩事件
 node tools/seed-memories.mjs             # 往当前库塞 3 条种子记忆（幂等，用于快速试 memory_search）
 node tools/eval-retrieval.mjs            # M2 检索评测（向量 / 关键词 / 混合权重对比）
@@ -179,6 +183,7 @@ context_compact()
 - M2 实测记录（embedding + 检索评测）：[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)
 - M3 实测记录（管理员 + 异步队列）：[`docs/M3-RESULTS.md`](docs/M3-RESULTS.md)
 - M4 实测记录（留言箱 + 多空间 + 侧边栏 UI）：[`docs/M4-RESULTS.md`](docs/M4-RESULTS.md)
+- 人格劫持防护说明：[`docs/PERSONA-GUARD.md`](docs/PERSONA-GUARD.md)
 - 缓存节省测算：[`docs/CACHE-SAVINGS.md`](docs/CACHE-SAVINGS.md)
 - 插件详情页文案：[`docs/DETAIL.md`](docs/DETAIL.md)
 - 模块契约：[`CONTRACT.md`](CONTRACT.md)

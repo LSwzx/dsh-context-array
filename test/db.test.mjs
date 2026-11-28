@@ -35,6 +35,7 @@ const REQUIRED_TABLES = [
   'inbox_wake_log',
   'meta',
   'session_bootstrap',
+  'session_persona_snapshot',
 ];
 const REQUIRED_INDEXES = [
   'idx_memories_space_valid',

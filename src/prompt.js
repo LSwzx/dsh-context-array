@@ -12,10 +12,12 @@
  */
 
 export const L1_ORDER = 100
+export const PERSONA_ORDER = 150
 export const L3_ORDER = 200
 export const L4_ORDER = 300
 
 export const L1_SECTION = 'context-array:l1'
+export const PERSONA_SECTION = 'context-array:personality'
 export const L3_SECTION = 'context-array:l3'
 export const L4_SECTION = 'context-array:l4'
 

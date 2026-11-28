@@ -60,7 +60,7 @@ export function getUsageStats(db)            // -> { requests, logs, lastLogAt }
 
 ### Schema (must match `dsh-context-array-v4.1.md` §4)
 
-Tables: `memory_spaces`, `session_space_links`, `memories`, `memories_fts` (FTS5 `tokenize='trigram'`, `content='memories'`, `content_rowid='seq'`) with triggers `memories_ai`, `memories_ad`, `memories_au`; `inbox`, `memory_queue`, `session_l4_snapshot`, `inbox_wake_log`, plus M1 additions `meta(key TEXT PRIMARY KEY, value TEXT)` and `session_bootstrap(session_id TEXT PRIMARY KEY, bootstrapped_at DATETIME DEFAULT CURRENT_TIMESTAMP)`.
+Tables: `memory_spaces`, `session_space_links`, `memories`, `memories_fts` (FTS5 `tokenize='trigram'`, `content='memories'`, `content_rowid='seq'`) with triggers `memories_ai`, `memories_ad`, `memories_au`; `inbox`, `memory_queue`, `session_l4_snapshot`, `inbox_wake_log`, `session_persona_snapshot` (persona block freeze, schema 3), plus M1 additions `meta(key TEXT PRIMARY KEY, value TEXT)` and `session_bootstrap(session_id TEXT PRIMARY KEY, bootstrapped_at DATETIME DEFAULT CURRENT_TIMESTAMP)`.
 `memories.embedding` is BLOB (nullable). Never read a BLOB into a typed array here.
 Commit the full §4 DDL as one `CREATE ... IF NOT EXISTS` script; tests assert every table + the FTS5 trigram path works with Chinese text.
 
@@ -342,6 +342,27 @@ Registers `sidebar.panellist` (`id: 'context-array'`, order 40, label `记忆`) 
 keyed panel (`key: 'context-array'`), plus package CSS through the `styles` builtin. It never
 imports a Harness Client package and never touches another plugin's DOM.
 
+## `src/persona.js` (M5, persona hijack protection)
+
+```js
+export const PERSONA_GUARD_MODES = Object.freeze(['off', 'observe', 'enforce'])
+export const DEFAULT_PERSONA_GUARD_MODE = 'observe'
+export const DEFAULT_PERSONA_GUARD_TOOLS = Object.freeze(['web_search', 'web_fetch'])
+export const PERSONA_PATTERNS            // 12 bilingual high-precision rules { id, re }
+export function contentText(content)     // model-visible text blocks only, 100k cap
+export function detectHijack(text)       // -> [{ id, excerpt }]
+export function buildPersonaText({ traits, memories })   // frozen <context-array-personality> block
+export function reassertionMessage(toolName, matches)    // enforce-mode user message
+export function createPersonaGuard({ config, events, warn, now })
+// -> { mode, tools, alerts, handle(exec, result, next) }
+// handle always awaits next(); it records persona/hijack-suspected and, only in
+// enforce mode on an accepted decision, appends one additionalContexts entry.
+```
+
+The frozen block is stored by `getOrCreatePersonaSnapshot(db, { sessionId, render })` in
+`session_persona_snapshot` and registered as prompt section `context-array:personality`
+(order 150, between L1 and L3).
+
 ## Config keys
 
 `dataDir`, `spaceId`, `spaceName`, `spaceRules`, `observeUsage`, `bootstrapMessages`,
@@ -352,7 +373,9 @@ imports a Harness Client package and never touches another plugin's DOM.
 `<dataDir>/prompt-salt.txt`), `enableEmbedding` (default `true`), `modelsDir`
 (default `<dataDir>/models`), `adminSessionIds` (default `[]`),
 `queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), `wakeMaxPerHour`
-(default `10`), derived `dbPath`, `usageLogPath`, `eventsLogPath`, `schemaVersion`.
+(default `10`), `personaGuard` (`off` | `observe` | `enforce`, default `observe`),
+`personaTraits` (default `[]`), `personaGuardTools` (default `["web_search","web_fetch"]`),
+`schemaVersion` (3), derived `dbPath`, `usageLogPath`, `eventsLogPath`.
 
 ## Tests
 

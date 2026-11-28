@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param {{ ctx: any, db: any, config: object, warn: (error: unknown) => void }} input
  * @returns {() => void} disposer (noop when the deployment has no web server)
  */
-export function registerContextArrayApi({ ctx, db, config, warn }) {
+export function registerContextArrayApi({ ctx, db, config, warn, persona = null }) {
   const web = ctx.get?.('webServer')
   if (!web || typeof web.register !== 'function') return () => {}
 
@@ -88,6 +88,25 @@ export function registerContextArrayApi({ ctx, db, config, warn }) {
         }
         const body = write ? await readJson(req) : {}
 
+        if (method === 'GET' && path === '/persona') {
+          const memories = db
+            .prepare(
+              `SELECT m.id, m.content, m.space_id, s.name AS space_name, m.timestamp
+                 FROM memories AS m
+                 LEFT JOIN memory_spaces AS s ON s.id = m.space_id
+                WHERE m.dimension = 'personality' AND m.superseded_by IS NULL
+                ORDER BY m.seq DESC
+                LIMIT 50`,
+            )
+            .all()
+          return json(res, 200, {
+            mode: persona?.mode ?? 'off',
+            tools: persona?.tools ?? [],
+            traits: persona?.traits ?? [],
+            memories,
+            alerts: persona?.alerts ?? [],
+          })
+        }
         if (method === 'GET' && path === '/health') {
           return json(res, 200, { ok: true, spaces: listSpacesDetailed(db).length, queue: queueStats(db) })
         }
