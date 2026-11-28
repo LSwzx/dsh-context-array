@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0 (2026-11-28)
+
+首个带完整面板与管理闭环的公开版本（npm 上上一个版本为 1.0.0）。
+
+### 新增
+- 侧边栏入口与插件管理器显示完整中文名「通联 - 多会话记忆插件」。
+- 真实对话 E2E：`tools/e2e-real.mjs` + 管理员工具 `e2e_run`/`e2e_status`，自动创建 4 个全新会话、
+  跑 5 轮自然语言对话并生成 `docs/E2E-REAL-REPORT.md`。
+- 记忆历史版本：`GET /memories/:id/history`（递归 CTE 查 `superseded_by` 链），面板记忆详情可查看
+  「历史版本（取代链）」，旧版本仅供人类查阅，绝不进入模型检索。
+- 队列统计接口 `GET /queue/stats`：面板直接按 `memory_queue.status` 统计已归档/已拒绝/待审核/处理中。
+- 检索时效：`recent`/`working` 超过 7 天在检索 SQL 中自动过滤（硬编码）。
+
+### 修复
+- 更新检测引入的 `inboxTracker` 初始化顺序问题，曾导致记忆提案/绑定/队列/留言工具在真实宿主全部未注册（P0）。
+- `inbox_send` 输出 schema 缺少 `hop`/`reason`，工具执行成功但返回校验失败。
+- 会话选择器不再把子智能体/委托会话列为可绑定会话；未命名会话默认隐藏，避免裸 id 噪音。
+
+### 记忆管理员提示词
+- 重写为中文版：按真实工具契约（`content`/`spaceId`/`queueId`）、单链取代、`EXPIRED` 过期规则、
+  六值拒稿原因枚举、单行 `[Summary]` 简报；`memory_queue_settle` 在服务端校验原因枚举。
+
 ## 1.0.4 (2026-11-28)
 
 - 边界明确：不再解析模型简报；面板统计直接查 SQLite（`GET /queue/stats`，`GROUP BY status`）。
