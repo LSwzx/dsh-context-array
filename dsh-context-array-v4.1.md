@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.4.4)
+# dsh-context-array 产品需求与技术架构文档 (v4.4.5)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,17 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.4.4 → v4.4.5（会话选择器列出全部会话，2026-11-28）**
+
+- 会话下拉原来只合并"有绑定 + 当前在线"，用户看到只有 2 个。现在改为宿主全量语料：
+  `ctx.get('sessionQuery').listSessions()`（live + persisted，newest-first），标题批量用
+  `readTitleSnapshots()` 折叠，`sessionTitle.get()` 作为在线会话兜底；绑定信息从 `session_space_links` 补上。
+- 「空间」与「留言箱」都增加"按标题/id 过滤会话"输入框（会话多时不用翻长列表）；当前选中项始终保留在选项里。
+- `/overview.sessions` 项扩展为 `{ sessionId, links, live, title, createdAt, subagent }`。
+- 单测 197 项（新增 persisted 会话 + 标题折叠用例）。
+
+**v4.4.3 → v4.4.4（会话选择器 + 空间删除 UX 修正，2026-11-28）**
 
 **v4.4.3 → v4.4.4（会话选择器 + 空间删除 UX 修正，2026-11-28）**
 

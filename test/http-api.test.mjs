@@ -278,6 +278,31 @@ test('a duplicate inbox send reports duplicate instead of delivering twice', asy
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox').get().n, 1)
 })
 
+test('the picker lists persisted sessions (not only bound/live) with folded titles', async (t) => {
+  const { route } = fixture(t, {
+    sessionQuery: {
+      listSessions: async () => [
+        { header: { id: 'persisted-1', createdAt: 100 }, live: false, persisted: true },
+        { header: { id: 'live-2', createdAt: 200 }, live: true, persisted: true },
+      ],
+      readTitleSnapshots: async (ids) =>
+        ids.map((id) => ({
+          sessionId: id,
+          status: 'fulfilled',
+          value: { title: { title: id === 'persisted-1' ? '很久以前的会话' : '当前会话' } },
+        })),
+    },
+  })
+  const overview = await request(route, { path: '/api/context-array/overview' })
+  assert.equal(overview.status, 200)
+  const persisted = overview.json.sessions.find((row) => row.sessionId === 'persisted-1')
+  assert.equal(persisted.title, '很久以前的会话')
+  assert.equal(persisted.live, false)
+  const live = overview.json.sessions.find((row) => row.sessionId === 'live-2')
+  assert.equal(live.live, true)
+  assert.equal(live.title, '当前会话')
+})
+
 test('overview sessions include live agents and host titles for the picker', async (t) => {
   const liveAgent = { id: 'live-1', session: {} }
   const { route } = fixture(t, {

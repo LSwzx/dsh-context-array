@@ -430,6 +430,7 @@ window.__ModuleLoader__.load({
       const [deleteHint, setDeleteHint] = React.useState('');
       const [bindSession, setBindSession] = React.useState('');
       const [bindRole, setBindRole] = React.useState('main');
+      const [sessionFilter, setSessionFilter] = React.useState('');
 
       function beginEdit() {
         setEditName(selected ? selected.name : '');
@@ -631,6 +632,13 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'ca-row' },
+                h('input', {
+                  className: 'ca-input',
+                  placeholder: '按标题 / id 过滤会话…',
+                  value: sessionFilter,
+                  onChange: (e) => setSessionFilter(e.target.value),
+                  'aria-label': '过滤会话',
+                }),
                 h(
                   'select',
                   {
@@ -642,7 +650,15 @@ window.__ModuleLoader__.load({
                   },
                   sessions.length === 0
                     ? h('option', { value: '' }, '没有可选择的会话')
-                    : sessions.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabel(row))),
+                    : sessions
+                        .filter((row) => {
+                          const current = bindSession || (sessions[0] ? sessions[0].sessionId : '');
+                          if (row.sessionId === current) return true;
+                          const needle = sessionFilter.trim().toLowerCase();
+                          if (needle === '') return true;
+                          return (sessionLabel(row) + ' ' + row.sessionId).toLowerCase().includes(needle);
+                        })
+                        .map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabel(row))),
                 ),
                 h(
                   'select',
@@ -1088,6 +1104,7 @@ window.__ModuleLoader__.load({
       const [inboxWake, setInboxWake] = React.useState(false);
       const [loadError, setLoadError] = React.useState('');
       const [status, setStatus] = React.useState('pending');
+      const [sessionFilter, setSessionFilter] = React.useState('');
 
       const sessionName = (id) => {
         if (!id) return '面板';
@@ -1179,6 +1196,13 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'ca-row' },
+                h('input', {
+                  className: 'ca-input',
+                  placeholder: '按标题 / id 过滤会话…',
+                  value: sessionFilter,
+                  onChange: (e) => setSessionFilter(e.target.value),
+                  'aria-label': '过滤会话',
+                }),
                 h(
                   'select',
                   {
@@ -1190,13 +1214,21 @@ window.__ModuleLoader__.load({
                   },
                   sessions.length === 0
                     ? h('option', { value: '' }, '没有可选择的会话')
-                    : sessions.map((row) =>
-                        h(
-                          'option',
-                          { key: row.sessionId, value: row.sessionId },
-                          (row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8)) + (row.live ? ' · 在线' : ''),
+                    : sessions
+                        .filter((row) => {
+                          const current = inboxTarget || (sessions[0] ? sessions[0].sessionId : '');
+                          if (row.sessionId === current) return true;
+                          const needle = sessionFilter.trim().toLowerCase();
+                          if (needle === '') return true;
+                          return ((row.title || '') + ' ' + row.sessionId).toLowerCase().includes(needle);
+                        })
+                        .map((row) =>
+                          h(
+                            'option',
+                            { key: row.sessionId, value: row.sessionId },
+                            (row.title ? String(row.title).slice(0, 40) : row.sessionId.slice(0, 8)) + (row.live ? ' · 在线' : ''),
+                          ),
                         ),
-                      ),
                 ),
                 h('input', { className: 'ca-input', style: { flex: 1 }, placeholder: '内容', value: inboxContent, onChange: (e) => setInboxContent(e.target.value), 'aria-label': '留言内容' }),
                 h('label', { className: 'ca-muted' }, h('input', { type: 'checkbox', checked: inboxWake, onChange: (e) => setInboxWake(e.target.checked) }), ' 唤醒'),

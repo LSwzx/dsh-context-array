@@ -115,42 +115,102 @@ export function registerRoute(ctx, route, { events = null, warn = () => {} } = {
   return attach(web)
 }
 
-/** Sessions for the panel pickers: bound sessions plus live agents, with titles when the
- * host's session-title service can fold one. */
-function listSessionsForPicker(ctx, db) {
+/**
+ * Sessions for the panel pickers.
+ *
+ * The corpus comes from the host's `sessionQuery.listSessions()` (live + persisted), so the
+ * picker lists every session instead of only bound or currently-live ones. Titles are folded
+ * with `readTitleSnapshots()`; a live title service is the fallback. Bindings are attached
+ * from `session_space_links` so the picker can show which space a session reads.
+ */
+async function listSessionsForPicker(ctx, db) {
+  const bindings = new Map(listKnownSessions(db).map((row) => [row.sessionId, row.links]))
   const entries = new Map()
-  for (const row of listKnownSessions(db)) entries.set(row.sessionId, { ...row, live: false, title: null })
+  let records = []
+  try {
+    records = (await ctx.get?.('sessionQuery')?.listSessions?.()) ?? []
+  } catch {
+    records = []
+  }
+  for (const record of records) {
+    const id = record?.header?.id ?? record?.id
+    if (!id) continue
+    entries.set(id, {
+      sessionId: id,
+      links: bindings.get(id) ?? [],
+      live: record.live === true,
+      title: null,
+      createdAt: typeof record?.header?.createdAt === 'number' ? record.header.createdAt : null,
+      subagent: record?.header?.origin === 'subagent' || Boolean(record?.header?.parentSession),
+    })
+  }
+  // Anything bound but absent from the corpus still has to be selectable.
+  for (const [id, links] of bindings) {
+    if (!entries.has(id)) entries.set(id, { sessionId: id, links, live: false, title: null, createdAt: null, subagent: false })
+  }
+  // Live agents that the corpus does not know yet (a session created in this turn).
   let live = []
   try {
     live = ctx.get?.('agents')?.list?.() ?? []
   } catch {
     live = []
   }
-  const titleService = (() => {
+  for (const agent of live) {
+    if (!agent?.id) continue
+    const entry = entries.get(agent.id)
+    if (entry) entry.live = true
+    else entries.set(agent.id, { sessionId: agent.id, links: [], live: true, title: null, createdAt: null, subagent: false })
+  }
+
+  const ids = [...entries.keys()]
+  const query = (() => {
     try {
-      return ctx.get?.('sessionTitle') ?? null
+      return ctx.get?.('sessionQuery') ?? null
     } catch {
       return null
     }
   })()
-  for (const agent of live) {
-    let title = null
+  if (query && typeof query.readTitleSnapshots === 'function' && ids.length > 0) {
     try {
-      title = titleService?.get?.(agent.session)?.title ?? null
+      const results = await query.readTitleSnapshots(ids)
+      for (const result of results ?? []) {
+        if (result?.status !== 'fulfilled') continue
+        const title = result.value?.title?.title
+        const entry = entries.get(result.sessionId)
+        if (entry && typeof title === 'string' && title !== '') entry.title = title
+      }
     } catch {
-      title = null
-    }
-    const entry = entries.get(agent.id)
-    if (entry) {
-      entry.live = true
-      entry.title = title
-    } else {
-      entries.set(agent.id, { sessionId: agent.id, links: [], live: true, title })
+      // Titles are decoration; the picker still works with ids.
     }
   }
-  return [...entries.values()].sort(
-    (left, right) => Number(right.live) - Number(left.live) || left.sessionId.localeCompare(right.sessionId),
-  )
+  if (ids.some((id) => entries.get(id).title === null)) {
+    const liveAgents = new Map(live.filter((agent) => agent?.id).map((agent) => [agent.id, agent]))
+    const titleService = (() => {
+      try {
+        return ctx.get?.('sessionTitle') ?? null
+      } catch {
+        return null
+      }
+    })()
+    for (const [id, entry] of entries) {
+      if (entry.title !== null) continue
+      const agent = liveAgents.get(id)
+      if (!agent) continue
+      try {
+        const title = titleService?.get?.(agent.session)?.title
+        if (typeof title === 'string' && title !== '') entry.title = title
+      } catch {
+        // Ignore a title failure for one session.
+      }
+    }
+  }
+
+  return [...entries.values()].sort((left, right) => {
+    if (left.live !== right.live) return left.live ? -1 : 1
+    const leftTime = left.createdAt ?? 0
+    const rightTime = right.createdAt ?? 0
+    return rightTime - leftTime || left.sessionId.localeCompare(right.sessionId)
+  })
 }
 
 /**
@@ -202,7 +262,7 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
           return json(res, 200, {
             spaces: listSpacesDetailed(db),
             bindings: listBindings(db),
-            sessions: listSessionsForPicker(ctx, db),
+            sessions: await listSessionsForPicker(ctx, db),
             queue: queueStats(db),
             wakeMaxPerHour: config.wakeMaxPerHour,
             defaultSpaceId: config.spaceId,

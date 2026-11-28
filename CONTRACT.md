@@ -335,8 +335,9 @@ export function registerRoute(ctx, route, { events, warn })  // ctx.inject(["web
 export function registerContextArrayApi({ ctx, db, config, warn, events, persona })  // -> disposer
 ```
 Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionId, links, live, title }]`, queue,
-`wakeMaxPerHour`, defaultSpaceId; titles come from the host `sessionTitle` service and stay null
-without it), `POST /spaces/create|/spaces/update|/spaces/delete`,
+`wakeMaxPerHour`, defaultSpaceId; the session list is the host corpus from
+`ctx.get('sessionQuery').listSessions()` (live + persisted), titled via `readTitleSnapshots()`
+with `sessionTitle.get()` as the live fallback), `POST /spaces/create|/spaces/update|/spaces/delete`,
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
 `POST /memories/delete` (always `403 MEMORY_READ_ONLY`: the UI is read-only for memory),
 `POST /bind|/unbind`,
