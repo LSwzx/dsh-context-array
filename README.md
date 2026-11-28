@@ -1,12 +1,13 @@
-# Context array（上下文阵列）
+# 通联 · 多会话记忆插件（dsh-context-array）
 
-面向 DeepSeek Harness（DSH）的**本地五维记忆**插件，围绕一条硬规则构建：
-**绝不重写被缓存的前缀**。动态内容一律追加在已缓存历史之后，静态内容只在拼装阶段注册。
+面向 DeepSeek Harness（DSH）的**本地多会话记忆**插件：五个维度的记忆、按空间隔离、KV-cache 优先的
+上下文拼装、跨会话留言箱、人格劫持防护，以及一个侧边栏管理面板。核心硬规则不变：
+**绝不重写被缓存的前缀**——动态内容一律追加在已缓存历史之后，静态内容只在拼装阶段注册。
 
-当前仓库包含设计文档
-[`dsh-context-array-v4.1.md`](dsh-context-array-v4.1.md) 里程碑 **M1**（观测 / 追加 / 静态存储）
-与 **M2**（本地 embedding + 混合检索）的实现，以及 **M0-6 压缩接管机制**、**M1-4 双轨缓存指标**。
-实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)、[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)。
+包名 `dsh-context-array`，插件中文名 **通联 - 多会话记忆插件**。当前版本汇总了 M0–M5：
+M0 六项前置验证（含压缩接管与折叠）、M1 观测/追加/静态存储、M2 本地 embedding + 混合检索、
+M3 中央记忆管理员 + 异步队列、M4 留言箱/多空间/侧边栏面板、M5 人格防护与按会话人格。
+实测记录见 [`docs/`](docs/) 下的 `M1-RESULTS`、`M2-RESULTS`、`M3-RESULTS`、`M4-RESULTS`、`PERSONA-GUARD`。
 
 > **已知问题（2026-11-28 评审，待修）**：见 [`docs/REVIEW-2026-11-28.md`](docs/REVIEW-2026-11-28.md)。
 > P0-0（面板 404）、P0-1（编辑默认空间不生效）与 P1 四项已修（v0.4.1），见该文档的"修复状态"；
@@ -87,6 +88,19 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 > `package.json` 里的 `dsh.bundle.patch` 指向同目录 `cordis.patch.yml`，它插入一条
 > `context-array` 插件行。模型可离线使用；`allowRemoteModels` 在 worker 里保持关闭，只读本地目录。
 
+### 从 npm 安装（发布后）
+
+```powershell
+# 方式一：交给 DSH 的插件管理器（agent 调用 plugin_manager install_bundle，target 填包名）
+#   target: "dsh-context-array"
+# 方式二：在 Plugins → Add plugin 里选择 npm 包并填入包名（具体入口以 DSH 版本为准）
+npm install dsh-context-array        # 仅用于查看/打包，DSH 侧安装请走插件管理器
+node tools/fetch-model.mjs           # 包内脚本：下载一次 e5-small 到 <dataDir>/models
+```
+
+> 发布维护者：`npm publish` 前会自动执行 `node --test`（`prepublishOnly`）；当前包名
+> `dsh-context-array` 在 npm 上未被占用。
+
 ## 配置
 
 `cordis.patch.yml` 的配置项：
@@ -97,9 +111,9 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `spaceId` / `spaceName` / `spaceRules` | `space-default` / `Default space` / … | 首次激活时创建的单一静态空间 |
 | `observeUsage` | `true` | 每个上报 usage 的请求写一行记录 |
 | `bootstrapMessages` | `true` | 每个新会话注入一条 bootstrap 快照 |
-| `compactionMode` | `fold` | `off` 不动部署；`observe` 只采样+告警不折叠；`fold` 接管并真折叠 |
-| `compactionWarnTokens` | `300000` | 压力采样记录阈值（token） |
-| `compactionAlarmRatio` | `0.7` | 压力到窗口该比例时写 `compaction/alarm` |
+| `compactionMode` | `off` | `off` 不动部署；`observe` 只采样+告警不折叠；`fold` 接管并真折叠（随包 patch 设为 `fold`） |
+| `compactionWarnTokens` | `400000` | 压力采样记录阈值（token；随包 patch 设为 `300000`） |
+| `compactionAlarmRatio` | `0.8` | 压力到窗口该比例时写 `compaction/alarm`（随包 patch 设为 `0.7`） |
 | `compactionFoldRatio` | `0.85` | 压力到窗口该比例才自动折叠 |
 | `compactionRetainRatio` | `0.3` | 折叠后至少保留的 surface token 比例 |
 | `compactionMinFoldTokens` | `8000` | 小于该 token 的区间不折叠 |
@@ -114,7 +128,7 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `wakeGlobalMaxPerHour` | `30` | 全局每小时唤醒上限（防会话互相唤醒风暴，超限降级为排队） |
 | `wakeCooldownMinutes` | `10` | 同一目标两次唤醒的最小间隔 |
 | `personaGuard` | `observe` | `off` 关闭；`observe` 只记录投毒尝试；`enforce` 记录并在该步追加保持人格的提醒 |
-| `personaTraits` | `[]` | 部署级人格特征（每行一条），与新会话冻结的人格块一起注入 |
+| `personaTraits` | `[]` | 部署级人格补充特征（每行一条），追加在对话人格之后 |
 | `personaGuardTools` | `["web_search","web_fetch"]` | 监视哪些工具的外部结果 |
 
 > ⚠️ `observe` 会占用 `ctx.compaction`。**如果部署里还要启用 `dsh-compaction-basic`，请先把它

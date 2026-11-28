@@ -1,135 +1,75 @@
-# Context array — M1
+# 通联 - 多会话记忆插件（dsh-context-array）
 
-## What this plugin does right now
+面向 DeepSeek Harness 的本地多会话记忆插件。所有记忆、向量、观测数据都留在本机；
+不联网、不调用外部 embedding 服务。
 
-It installs the **observation and append layer** plus the **static single-space
-store** described in the project document's milestone M1. Nothing in this version
-writes memory automatically; it establishes the machinery the later milestones
-(M2–M4) build on.
+## 它做什么
 
-### 1. L1–L4 prompt sections
+- **五维记忆**：`working / recent / fact / reflection / personality`，SQLite 存储 + FTS5 trigram。
+- **本地混合检索**：`multilingual-e5-small`（384 维，q8 ONNX，worker 线程）向量 top-20 与关键词 top-20，
+  RRF 2:1 融合，`memory_search` 工具按需调用。
+- **KV-cache 优先的上下文**：L1（基础规则）/ 人格块 / L3（角色）/ L4（空间规则）静态拼装，
+  动态内容只追加在已缓存历史之后；每个请求把 `prefix_hit` 与 `whole_hit` 分开记录。
+- **压缩接管**：`compactionMode: fold` 时接管 DSH 压缩，在轮次边界把较早历史折叠成一条摘要
+  （保留系统头与最近上下文），失败会关锁并留下事件。
+- **中央记忆管理员 + 异步队列**：普通会话只能 `memory_propose` 入队；管理员会话用
+  `memory_queue_claim → memory_archive` 归档（本地算向量、支持 `supersedesId` 取代与回滚）。
+- **多空间与会话隔离**：空间规则（L4）按会话快照冻结；改空间只影响新会话。
+- **留言箱**：排队（不唤醒、不产生计费轮次）与唤醒（开新轮、每小时/全局/冷却限流），
+  带 `hop_count`（上限 3）与限流标记。
+- **人格防护**：人格块位于 L1 之后、L3 之前；外部工具结果（默认 `web_search`/`web_fetch`）命中
+  12 条中英投毒规则时记录事件，`enforce` 模式追加"保持原人格"提醒。人格默认由 AI 写自己的对话，
+  人类可在侧边栏面板里任选一个对话修改。
 
-DSH renders prompt sections into a single `system`-role message that becomes node 0
-of the derived history. This plugin registers three sections at fixed orders
-(100, 200, 300 — free positions between the deployment persona and first-party tool
-guidance):
+## 侧边栏面板
 
-- **L1** — base rules and safety (static text).
-- **L3** — role rules (static text).
-- **L4** — space rules, registered in the agent's own scope.
+左侧边栏「记忆」图标打开主面板，共五个页签：
 
-L4 is rendered from the session's bound space set, sorted by space id, with no
-timestamps. On first sight of a session the exact rendered text is persisted in
-`session_l4_snapshot`; every later request reuses that snapshot. Editing a space's
-name or description therefore affects **new** sessions only and can never rewrite an
-existing session's node 0.
+| 页签 | 内容 |
+|---|---|
+| 空间 | 新建/编辑空间（名称与 L4 规则）、会话绑定（下拉选主会话）、删除空间（要求无有效记忆） |
+| 记忆 | 按空间与维度浏览有效记忆；只读，人类不能编辑或删除 |
+| 队列 | 只读：状态计数、卡住的 processing、failed 的重试次数与错误 |
+| 留言箱 | 从下拉选目标会话发留言；可勾选唤醒；显示跳数与限流标记 |
+| 人格 | 选对话（或全局默认）编辑人格；显示防护模式、投毒记录与最近修改者 |
 
-### 2. Static store
+## 安装
 
-The SQLite database lives at `%USERPROFILE%\.dsh\context-array\context-array.db` by default and
-is created with the schema from the design document §4: `memory_spaces`,
-`session_space_links`, `memories` (explicit integer `seq` primary key), the FTS5
-`trigram` index over `memories` with its three content-table triggers, `inbox`,
-`memory_queue`, `session_l4_snapshot`, `inbox_wake_log`, plus `meta` and
-`session_bootstrap`.
+发布到 npm 后，包名是 `dsh-context-array`：
 
-It uses the runtime's built-in `node:sqlite`, so there is no native build step. The
-API is synchronous (`DatabaseSync`) and has no `db.transaction()` wrapper, so
-transactions are written as `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`.
+- 交给 DSH 插件管理器：`plugin_manager install_bundle`，target 填 `dsh-context-array`；
+  或使用图形界面 **Plugins → Add plugin**（入口以当前 DSH 版本为准）。
+- 首次安装后下载一次本地模型：在包目录执行 `node tools/fetch-model.mjs`
+  （约 129 MiB；离线可用，sha256 校验、断点续传）。
+- 不想用向量检索可设 `enableEmbedding: false`，只走关键词路。
 
-### 3. Usage observer
+## 权限与数据
 
-The `llm/stream` waterfall exposes every model call. The observer wraps the stream
-and passes each chunk through untouched while recording one JSON line for every request
-that reports usage:
+- 记忆写入只由记忆管理员（管理员会话工具）完成；人类在面板里**只读**。
+- 人格按对话存储：AI 用 `persona_write` 写当前对话，人类可在面板里改同一行。
+- 数据目录默认 `~/.dsh/context-array/`：`context-array.db`、`usage.jsonl`、`events.jsonl`、`models/`。
+- 无遥测、无远程调用；embedding 模型只从本地目录加载。
 
-```json
-{
-  "schema": 1,
-  "at": "2026-11-22T06:47:07.509Z",
-  "sessionId": "…",
-  "provider": "deepseek-official",
-  "model": "deepseek-flash",
-  "messageCount": 383,
-  "toolCount": 63,
-  "systemMessageCount": 8,
-  "systemDigest": "…",
-  "systemDigestAll": "…",
-  "toolsDigest": "…",
-  "prefixDigest": "…",
-  "usage": { "inputTokens": 2242, "outputTokens": 401, "cacheReadTokens": 495616, "cacheWriteTokens": 0, "totalTokens": 498259 },
-  "hitRate": 0.995497,
-  "wholeHit": 0.995497,
-  "prefixHit": 1,
-  "prefixTokens": 17957,
-  "prefixHitTokens": 17957,
-  "systemTokens": 1833,
-  "toolTokens": 16124,
-  "inputTokens": 2242,
-  "cacheReadTokens": 495616,
-  "cacheWriteTokens": 0,
-  "usageSource": "normalized-usage-chunk"
-}
-```
+## 配置（常用）
 
-`prefixDigest` covers system node 0 + the tool declarations. `prefixHit` is the
-architecture metric: `min(prefixTokens, cacheReadTokens) / prefixTokens`, where
-`prefixTokens` prices node 0 plus the tool schemas with DSH's fixed heuristic
-(four characters per token plus framing). `wholeHit` is the provider-reported
-share and only a cost reference. `systemMessageCount` / `systemDigestAll` expose
-a prompt DSH appended in history (`systemPromptUpdate: 'in-history'`).
+| 键 | 代码默认 | 说明 |
+|---|---|---|
+| `spaceId` / `spaceName` / `spaceRules` | `space-default` / … | 默认空间（L4 规则） |
+| `compactionMode` | `off` | `off`/`observe`/`fold`；随包 patch 设为 `fold` |
+| `adminSessionIds` | `[]` | 中央记忆管理员会话 id |
+| `enableEmbedding` | `true` | `false` 时只用关键词检索 |
+| `personaGuard` | `observe` | `off`/`observe`/`enforce` |
+| `personaGuardTools` | `["web_search","web_fetch"]` | 监视哪些工具的外部结果 |
+| `queueStaleMinutes` / `queueMaxRetries` | `10` / `3` | 队列过期回收与重试上限 |
+| `wakeMaxPerHour` / `wakeGlobalMaxPerHour` / `wakeCooldownMinutes` | `10` / `30` / `10` | 留言箱唤醒限流 |
 
-A second log, `events.jsonl`, records `compaction/provider-installed`,
-`compaction/pressure`, `compaction/alarm`, `compaction/provider-conflict` and
-`history/replace`.
+## 已知边界
 
-## 5. Local retrieval (`memory_search`)
+- 面板未做视觉美化；点击流需要在真实页面里验证。
+- 每轮自动检索注入 `<memory>` 尚未接线（当前只有按需 `memory_search` 工具）。
+- 留言 `hop_count`/限流依赖宿主 `agent/inbox/claimed` 事件，冷启动的历史留言不参与归因。
+- 压缩折叠会一次性失效前缀缓存（设计上接受的代价）；折叠事件可在 `events.jsonl` 单独审计。
 
-M2 adds a local embedding model and a hybrid retriever:
+## 许可
 
-- **Model**: `Xenova/multilingual-e5-small` (384 dims, q8 ONNX, about 129 MiB), downloaded
-  once with `node tools/fetch-model.mjs` into `<dataDir>/models`. It runs in a worker thread:
-  first load takes about 1.6–1.8 s, one embedding about 12.5 ms, and a queue of 60 requests
-  moves the main thread's 50 ms timer by 3 ms median — the Host stays responsive.
-- **Retrieval**: vector top-20 (dot product over L2-normalised vectors) plus FTS5 `trigram`
-  top-20 (short queries fall back to `LIKE`), fused with RRF at **2:1** vector/keyword weights,
-  truncated to a token budget, rendered as a `<memory>` block. If the embedder is unavailable
-  the keyword path still answers.
-- **Tool**: `memory_search(query, limit?)`. The calling session comes from the host-injected
-  execution context, and bound spaces are read from `session_space_links`; the model cannot
-  name another session or space. Memory text is data, never instructions.
-
-Measured on 40 memories / 15 queries: vector-only recall@5 1.00, MRR 0.9667; keyword-only
-0.5333 / 0.4056; hybrid 2:1 1.00 / 0.9667 at about 8 ms. Details in `docs/M2-RESULTS.md`.
-
-Automatic per-turn injection of retrieved `<memory>` blocks is **not wired yet**: it waits for
-M3, when the manager starts writing real memories. Until then the model calls the tool on demand.
-
-### 4. Append layer
-
-For a new conversation the plugin injects one small snapshot message through
-`agent.inject()`. That queues model-facing context for the next `agent/pre-step`:
-it is appended after `step/start` (after the cached prefix), it does not wake an idle
-agent, and it never changes L1–L4. The injection is idempotent per session
-(`session_bootstrap`) and never throws into the turn.
-
-## How to verify
-
-1. Install this directory as a plugin in the DSH profile.
-2. Send one message in a new session; a real model request happens.
-3. Read the tail of `~/.dsh/context-array/usage.jsonl` — there is one line per
-   request with the provider-reported counters and the computed hit rate.
-4. Compare `prefixDigest` across consecutive requests in the same session: equal
-   digests mean the L1–L4 bytes are stable and the request is cache-eligible.
-5. Send another message and check that `hitRate` is high while `prefixDigest`
-   matches the previous line.
-
-## Limitations
-
-- Only normalized `TokenUsage` is exposed to plugins; the provider's raw usage JSON
-  is not reachable. Records mark this explicitly with `usageSource`.
-- Memory retrieval, the manager queue, and the inbox are schema-only in M1; M2–M4
-  implement them.
-- Embedding is not part of M1. When M2 adds it, it will run on CPU and must run in a
-  worker or child process: `onnxruntime` inference is synchronous and would otherwise
-  block the whole Host.
+MIT © 2026 LSwzx。仓库：<https://github.com/LSwzx/dsh-context-array>。

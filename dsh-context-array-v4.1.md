@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.5.1)
+# dsh-context-array 产品需求与技术架构文档 (v4.5.2)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,19 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.5.1 → v4.5.2（中文名改为「通联 - 多会话记忆插件」，准备 npm 发布，2026-11-28）**
+
+- 插件显示名：`locale/zh.json` 的 `meta.title` 改为 **通联 - 多会话记忆插件**，
+  英文 `Tonglian - multi-session memory`；`meta.description` 与 `docs/DETAIL.md` 更新为
+  多会话记忆、面板、人格防护等当前功能。
+- npm 发布准备：移除 `private`，版本升到 **1.0.0**，补齐 repository/homepage/bugs/keywords/author/
+  publishConfig，`files` 加入 `CHANGELOG.md`，`prepublishOnly` 先跑全量测试；
+  `npm pack` 校验 48 个文件 / 183 KB。
+- 文档：README 标题与安装说明改为「通联」并补充 npm 安装方式；
+  配置表按代码默认值修正（patch 覆盖项单独标注）。
+
+**v4.5.0 → v4.5.1（会话选择器去掉裸 id 噪音，2026-11-28）**
 
 **v4.5.0 → v4.5.1（会话选择器去掉裸 id 噪音，2026-11-28）**
 
