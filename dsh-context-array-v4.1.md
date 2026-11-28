@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.3.1)
+# dsh-context-array 产品需求与技术架构文档 (v4.3.2)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -473,6 +473,22 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.3.1 → v4.3.2（2026-11-28 评审快照：缺陷登记，未改代码）**
+
+按"文档声称的功能是否真的实现"做了一次只读评审，结论与证据统一登记在
+[`docs/REVIEW-2026-11-28.md`](docs/REVIEW-2026-11-28.md)。要点：
+
+- **P0-0（新增，用户实测）**：侧边栏面板已渲染但 `/api/context-array/*` 返回 404，四个页签不可用。
+  最可能原因是激活时 `ctx.get('webServer')` 尚不可用，`src/http-api.js` 静默返回空 disposer、
+  路由未注册；修复方向为 `ctx.inject(['webServer'], …)` + 注册事件 + 面板错误态/重试。
+- **P0-1**：编辑默认空间名称/规则不生效——未绑定会话的 L4 取 config 而非 `memory_spaces` 行。
+- **P1**：留言箱永久去重（缺小时桶）、`inbox_list {status:'all'}` 只回待读、`deleteSpace` 默认空间
+  判定写死 `space-default`、唤醒缺冷却/全局上限。
+- **P2/P3**：`hop_count` 永远 0 而面板显示跳数；README/CONTRACT/设计文档多处口径与实现不一致
+  （依赖说明、schemaVersion、配置默认值、工具名、测试数量、`bindings=13`、`prefixDigest` 等）。
+
+本版**只登记问题，不修改实现**；修复批次建议见评审文档第 4 节。
 
 **v4.3.0 → v4.3.1（M4 UI 修正 + 队列页，2026-11-22）**
 
