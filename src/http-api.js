@@ -227,6 +227,32 @@ async function listSessionsForPicker(ctx, db) {
 }
 
 /**
+ * Who is the memory manager right now, ignoring stale ids.
+ *
+ * A configured id (`adminSessionIds`) or a `role='admin'` binding only counts while the
+ * session still exists in the host corpus; a deleted session therefore unlocks the
+ * one-time claim instead of locking the instance out forever.
+ */
+function adminStateFrom({ sessions, db, config }) {
+  const known = new Set(sessions.map((row) => row.sessionId))
+  const configured = [...new Set(Array.isArray(config.adminSessionIds) ? config.adminSessionIds : [])].filter((id) =>
+    known.has(id),
+  )
+  const bound = db
+    .prepare("SELECT DISTINCT session_id FROM session_space_links WHERE role = 'admin'")
+    .all()
+    .map((row) => row.session_id)
+    .filter((id) => known.has(id))
+  const adminSessionId = configured[0] ?? bound[0] ?? null
+  return {
+    adminSessionId,
+    configuredCount: configured.length,
+    boundCount: bound.length,
+    canClaim: adminSessionId === null,
+  }
+}
+
+/**
  * Register the API route.
  *
  * @param {{ ctx: any, db: any, config: object, warn: (error: unknown) => void,
@@ -310,13 +336,57 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
           return json(res, 200, { ok: true, spaces: listSpacesDetailed(db).length, queue: queueStats(db) })
         }
         if (method === 'GET' && path === '/overview') {
+          const sessions = await listSessionsForPicker(ctx, db)
           return json(res, 200, {
             spaces: listSpacesDetailed(db),
             bindings: listBindings(db),
-            sessions: await listSessionsForPicker(ctx, db),
+            sessions,
             queue: queueStats(db),
             wakeMaxPerHour: config.wakeMaxPerHour,
             defaultSpaceId: config.spaceId,
+            admin: adminStateFrom({ sessions, db, config }),
+          })
+        }
+        if (method === 'POST' && path === '/admin/claim') {
+          // One-time onboarding: a human may appoint one existing (main) session as the
+          // memory manager. Once an admin exists this endpoint stays closed forever; later
+          // changes are deployment config only.
+          const sessions = await listSessionsForPicker(ctx, db)
+          const current = adminStateFrom({ sessions, db, config })
+          if (!current.canClaim) {
+            return json(res, 409, { claimed: false, error: 'ADMIN_ALREADY_EXISTS', admin: current })
+          }
+          const sessionId = String(body.sessionId ?? '').trim()
+          if (sessionId === '') return json(res, 400, { claimed: false, error: 'SESSION_ID_REQUIRED' })
+          const target = sessions.find((row) => row.sessionId === sessionId)
+          if (!target) return json(res, 404, { claimed: false, error: 'SESSION_NOT_FOUND' })
+          db.exec('BEGIN IMMEDIATE')
+          try {
+            db.prepare("DELETE FROM session_space_links WHERE role = 'admin'").run()
+            db.prepare(
+              `INSERT INTO session_space_links (session_id, space_id, role) VALUES (?, ?, 'admin')
+               ON CONFLICT(session_id, space_id) DO UPDATE SET role = 'admin'`,
+            ).run(sessionId, config.spaceId)
+            db.exec('COMMIT')
+          } catch (error) {
+            try {
+              db.exec('ROLLBACK')
+            } catch {
+              // The original failure is the useful one.
+            }
+            throw error
+          }
+          try {
+            events?.append({ type: 'admin/claimed', sessionId, spaceId: config.spaceId, at: new Date().toISOString() })
+          } catch {
+            // Observability only.
+          }
+          return json(res, 200, {
+            claimed: true,
+            admin: {
+              adminSessionId: sessionId,
+              session: { sessionId, title: target.title ?? null, live: target.live === true },
+            },
           })
         }
         if (method === 'POST' && path === '/spaces/create') {

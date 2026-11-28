@@ -19,10 +19,11 @@
         compactionSummaryMaxTokens: 600
         enableEmbedding: true
         # M3: central memory manager identities (deployment config, never model-set).
-        # Session ids are per-conversation: update this list when the admin session
-        # changes. M4's UI will bind roles into session_space_links instead.
-        adminSessionIds:
-          - ef62b67e-09a8-4f18-9424-c7b3aa449cef
+        # Leave this empty on a fresh install: the host offers a one-time "设为记忆管理员"
+        # action in the space panel (POST /admin/claim), which writes a role='admin'
+        # binding for one existing session. Fill explicit ids only to pin an admin for a
+        # whole deployment (they must exist in this profile).
+        adminSessionIds: []
         queueStaleMinutes: 10
         queueMaxRetries: 3
         wakeMaxPerHour: 10   # M4 inbox wake rate limit per target session

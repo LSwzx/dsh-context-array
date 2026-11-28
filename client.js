@@ -499,6 +499,7 @@ window.__ModuleLoader__.load({
       const [editName, setEditName] = React.useState('');
       const [editDesc, setEditDesc] = React.useState('');
       const [confirmDelete, setConfirmDelete] = React.useState(false);
+      const [adminSession, setAdminSession] = React.useState('');
       const [deleteHint, setDeleteHint] = React.useState('');
       const [bindSession, setBindSession] = React.useState('');
       const [bindRole, setBindRole] = React.useState('main');
@@ -580,6 +581,64 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'ca-list', role: 'list' },
+            ((overview && overview.admin) || {}).adminSessionId
+              ? h(
+                  'div',
+                  { className: 'ca-card', style: { margin: '0 0 10px' } },
+                  h('div', { className: 'ca-name' }, '记忆管理员'),
+                  h(
+                    'div',
+                    { className: 'ca-hint' },
+                    '当前管理员：' +
+                      (sessions.find((row) => row.sessionId === overview.admin.adminSessionId)
+                        ? sessionLabel(sessions.find((row) => row.sessionId === overview.admin.adminSessionId))
+                        : String(overview.admin.adminSessionId).slice(0, 8)),
+                  ),
+                  h('div', { className: 'ca-hint' }, '回到那个对话，说「处理一下记忆队列」，它就会领取候选、审核并归档。'),
+                  h('div', { className: 'ca-hint' }, '面板只支持设置一次；要更换管理员，请修改配置文件里的 adminSessionIds 后重载插件。'),
+                )
+              : h(
+                  'div',
+                  { className: 'ca-card', style: { margin: '0 0 10px' } },
+                  h('div', { className: 'ca-name' }, '记忆管理员'),
+                  h('div', { className: 'ca-hint' }, '还没有记忆管理员：它负责审核大家提交的记忆，每个实例只需要一个。'),
+                  h('div', { className: 'ca-hint' }, '① 先在左侧新建一个对话，随便说句话让它保存下来；'),
+                  h('div', { className: 'ca-hint' }, '② 回到这里，在下面选中这个对话；'),
+                  h('div', { className: 'ca-hint' }, '③ 点「设为记忆管理员」，再回那个会话说「处理一下记忆队列」。'),
+                  h(
+                    'div',
+                    { className: 'ca-row' },
+                    h(
+                      'select',
+                      {
+                        className: 'ca-input',
+                        style: { flex: 1 },
+                        value: adminSession || (sessions[0] ? sessions[0].sessionId : ''),
+                        onChange: (e) => setAdminSession(e.target.value),
+                        'aria-label': '选择管理员会话',
+                      },
+                      sessions.length === 0
+                        ? h('option', { value: '' }, '还没有可选会话，请先新建一个对话')
+                        : sessions.map((row) => h('option', { key: row.sessionId, value: row.sessionId }, sessionLabelText(row))),
+                    ),
+                    h(
+                      'button',
+                      {
+                        className: 'ca-btn',
+                        disabled: busy || (!adminSession && sessions.length === 0),
+                        onClick: () =>
+                          act('设为记忆管理员', async () => {
+                            const sessionId = adminSession || (sessions[0] ? sessions[0].sessionId : '');
+                            const data = await call('/admin/claim', { method: 'POST', body: { sessionId } });
+                            const title = data.admin && data.admin.session ? data.admin.session.title : '';
+                            return '已设为管理员' + (title ? '：' + title : '') + '；回到那个对话说「处理一下记忆队列」即可';
+                          }),
+                      },
+                      '设为记忆管理员',
+                    ),
+                  ),
+                  h('div', { className: 'ca-hint' }, '设置成功后这个入口会关闭，避免误改；配置方式仍然保留给部署方。'),
+                ),
             spaces.map((space) =>
               h(
                 'button',

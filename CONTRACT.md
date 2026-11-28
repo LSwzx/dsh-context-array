@@ -342,6 +342,9 @@ Routes: `GET /health`, `GET /overview` (spaces, bindings, `sessions: [{ sessionI
 `ctx.get('sessionQuery').listSessions()` (live + persisted), titled via `readTitleSnapshots()`
 with `sessionTitle.get()` as the live fallback), `POST /spaces/create|/spaces/update|/spaces/delete`,
 `GET /memories/:id/history` (recursive CTE over `superseded_by`, oldest first; 404 when the id is unknown),
+`GET /overview` also returns `admin: { adminSessionId, configuredCount, boundCount, canClaim }`,
+`POST /admin/claim { sessionId }` (one-time onboarding; 409 `ADMIN_ALREADY_EXISTS` once an admin exists;
+404 `SESSION_NOT_FOUND` for subagent/unknown sessions; writes one `role='admin'` binding to the default space),
 `GET /queue/stats` (`GROUP BY status` counters),
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
 `POST /memories/delete` (always `403 MEMORY_READ_ONLY`: the UI is read-only for memory),

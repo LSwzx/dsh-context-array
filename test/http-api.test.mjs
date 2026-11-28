@@ -13,7 +13,7 @@ import { registerContextArrayApi } from '../src/http-api.js'
 
 function fixture(t, services = {}, extra = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'context-array-api-'))
-  const config = resolveConfig({ dataDir })
+  const config = resolveConfig({ dataDir, ...(extra.config ?? {}) })
   const opened = openStore(config)
   ensureDefaultSpace(opened.db, config)
 
@@ -536,4 +536,85 @@ test('the queue stats endpoint counts rows in SQLite', async (t) => {
   assert.equal(response.json.stats.failed, 1)
   assert.equal(response.json.stats.processing, 0)
   assert.equal(response.json.stats.total, 4)
+})
+
+test('a fresh instance can claim one existing session as the memory manager', async (t) => {
+  const sessions = [
+    { header: { id: 's-main', createdAt: 200 }, live: true, persisted: true },
+    { header: { id: 's-sub', createdAt: 300, origin: 'subagent' }, live: false, persisted: true },
+  ]
+  const sessionQuery = { listSessions: async () => sessions, readTitleSnapshots: async () => [] }
+  const { route, db } = fixture(t, { sessionQuery })
+
+  const before = await request(route, { path: '/api/context-array/overview' })
+  assert.equal(before.json.admin.canClaim, true)
+  assert.equal(before.json.admin.adminSessionId, null)
+
+  const claimed = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/admin/claim',
+    headers: { 'x-context-array-ui': '1' },
+    body: { sessionId: 's-main' },
+  })
+  assert.equal(claimed.status, 200)
+  assert.equal(claimed.json.claimed, true)
+  assert.equal(claimed.json.admin.adminSessionId, 's-main')
+  assert.equal(db.prepare("SELECT role FROM session_space_links WHERE session_id = 's-main'").get().role, 'admin')
+
+  const after = await request(route, { path: '/api/context-array/overview' })
+  assert.equal(after.json.admin.adminSessionId, 's-main')
+  assert.equal(after.json.admin.canClaim, false)
+
+  const again = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/admin/claim',
+    headers: { 'x-context-array-ui': '1' },
+    body: { sessionId: 's-main' },
+  })
+  assert.equal(again.status, 409)
+  assert.equal(again.json.error, 'ADMIN_ALREADY_EXISTS')
+})
+
+test('the claim rejects subagent sessions, unknown ids and body-less requests', async (t) => {
+  const sessions = [{ header: { id: 's-main', createdAt: 200 }, live: false, persisted: true }]
+  const { route } = fixture(t, { sessionQuery: { listSessions: async () => sessions } })
+
+  const sub = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/admin/claim',
+    headers: { 'x-context-array-ui': '1' },
+    body: { sessionId: 's-sub' },
+  })
+  assert.equal(sub.status, 404)
+  assert.equal(sub.json.error, 'SESSION_NOT_FOUND')
+
+  const empty = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/admin/claim',
+    headers: { 'x-context-array-ui': '1' },
+    body: {},
+  })
+  assert.equal(empty.status, 400)
+  assert.equal(empty.json.error, 'SESSION_ID_REQUIRED')
+})
+
+test('a deployment-configured admin keeps the claim entry closed', async (t) => {
+  const sessions = [{ header: { id: 's-main', createdAt: 200 }, live: false, persisted: true }]
+  const { route } = fixture(
+    t,
+    { sessionQuery: { listSessions: async () => sessions } },
+    { config: { adminSessionIds: ['s-main'] } },
+  )
+
+  const overview = await request(route, { path: '/api/context-array/overview' })
+  assert.equal(overview.json.admin.adminSessionId, 's-main')
+  assert.equal(overview.json.admin.canClaim, false)
+
+  const claimed = await request(route, {
+    method: 'POST',
+    path: '/api/context-array/admin/claim',
+    headers: { 'x-context-array-ui': '1' },
+    body: { sessionId: 's-main' },
+  })
+  assert.equal(claimed.status, 409)
 })
