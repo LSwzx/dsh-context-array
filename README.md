@@ -9,8 +9,8 @@
 实测记录：[`docs/M1-RESULTS.md`](docs/M1-RESULTS.md)、[`docs/M2-RESULTS.md`](docs/M2-RESULTS.md)。
 
 > **已知问题（2026-11-28 评审，待修）**：见 [`docs/REVIEW-2026-11-28.md`](docs/REVIEW-2026-11-28.md)。
-> 当前最严重的是面板请求 404（四页签不可用）与"编辑默认空间规则不生效"；其余为留言去重/限流口径
-> 与文档不一致。该文档只登记问题与修复方向，不含代码改动。
+> P0-0（面板 404）、P0-1（编辑默认空间不生效）与 P1 四项已修（v0.4.1），见该文档的"修复状态"；
+> 剩余为文档口径问题。面板 404 的修复需刷新页面后目视确认。
 >
 > **状态**：M1–M4 全部完成并实测。
 > **M0-6 压缩已接管并实装折叠**（`compactionMode: fold`）：保留系统头、在轮次边界把较早区间换成一条
@@ -110,6 +110,8 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 | `queueStaleMinutes` | `10` | 领取超过该分钟的 processing 行回到 pending |
 | `queueMaxRetries` | `3` | 重试达到该值的 pending 行置 failed |
 | `wakeMaxPerHour` | `10` | 同一目标会话每小时最多被唤醒次数（超限降级为排队） |
+| `wakeGlobalMaxPerHour` | `30` | 全局每小时唤醒上限（防会话互相唤醒风暴，超限降级为排队） |
+| `wakeCooldownMinutes` | `10` | 同一目标两次唤醒的最小间隔 |
 | `personaGuard` | `observe` | `off` 关闭；`observe` 只记录投毒尝试；`enforce` 记录并在该步追加保持人格的提醒 |
 | `personaTraits` | `[]` | 部署级人格特征（每行一条），与新会话冻结的人格块一起注入 |
 | `personaGuardTools` | `["web_search","web_fetch"]` | 监视哪些工具的外部结果 |
@@ -121,7 +123,7 @@ node tools/fetch-model.mjs             # 下载 e5-small 到 <dataDir>/models（
 ## 验证
 
 ```powershell
-node --test                              # 全仓单元 + 接线测试（182 项）
+node --test                              # 全仓单元 + 接线测试（187 项）
 node docs/analyze-usage.mjs              # 双轨指标 + TTL 空档 + 压缩事件
 node tools/seed-memories.mjs             # 往当前库塞 3 条种子记忆（幂等，用于快速试 memory_search）
 node tools/eval-retrieval.mjs            # M2 检索评测（向量 / 关键词 / 混合权重对比）

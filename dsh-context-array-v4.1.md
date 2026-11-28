@@ -1,4 +1,4 @@
-# dsh-context-array 产品需求与技术架构文档 (v4.4.0)
+# dsh-context-array 产品需求与技术架构文档 (v4.4.1)
 
 整合 v4.0 全部需求与 v4.1 修订清单。M0（六项前置验证，含压缩接管与折叠实现）、M1（观测/追加/静态存储）、M2（本地 embedding + 混合检索）、M3（中央记忆管理员 + 异步队列）、M4（留言箱 + 多空间 + 侧边栏 UI）均已完成并实测。实测记录：`docs/M1-RESULTS.md`（含 M0-6）、`docs/M2-RESULTS.md`、`docs/M3-RESULTS.md`、`docs/M4-RESULTS.md`；缓存收益见 `docs/CACHE-SAVINGS.md`。
 
@@ -510,6 +510,22 @@ export class MemoryManagerDB {
 - RRF 之外是否需要加权（时间新近度、维度权重）——路径权重已调为 2:1，维度/时间权重未做。
 
 ## 8. 修订记录
+
+**v4.4.0 → v4.4.1（修复评审 P0/P1 与面板 404，2026-11-28）**
+
+- **P0-0 面板 404**：API 路由改为 `ctx.inject(['webServer'], …)` 注册（不再依赖激活瞬间的
+  `ctx.get`），并新增 `http-api/registered | unavailable | failed` 事件；面板在 overview 失败时
+  显示错误条与"重试"，不再无限停在"正在读取空间…"。
+- **P0-1**：未绑定会话的默认空间改为读 `memory_spaces` 行（config 仅在该行缺失时兜底），
+  面板编辑规则对新会话真正生效。
+- **P1-1**：留言去重键加入 UTC 小时桶，跨小时可再次发送；同小时仍去重。
+- **P1-2**：`inbox_list { status: 'all' }` 原样透传，不再退化成 pending。
+- **P1-3**：`deleteSpace` 接受 `defaultSpaceId`，HTTP 与面板改用 `config.spaceId`/overview 字段。
+- **P1-4**：唤醒新增 per-target 冷却（默认 10 分钟）与全局每小时上限（默认 30），超限降级排队并记 throttled。
+- 单测 187 项全绿（新增：默认空间取库、删除默认空间参数化、小时桶去重、冷却、全局上限）。
+- 评审文档 `docs/REVIEW-2026-11-28.md` 增加"修复状态"一节。
+
+**v4.3.2 → v4.4.0（新增人格劫持防护，2026-11-28）**
 
 **v4.3.2 → v4.4.0（新增人格劫持防护，2026-11-28）**
 

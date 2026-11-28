@@ -272,6 +272,34 @@ test('observe mode claims the seam once and records it in events.jsonl', (t) => 
   assert.equal(events[0].type, 'compaction/provider-installed')
 })
 
+test('the default-space prompt follows the database row, not the config', (t) => {
+  const { dataDir, host } = setup(t)
+  const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
+  const db = new DatabaseSync(path.join(dataDir, 'context-array.db'))
+  db.prepare('UPDATE memory_spaces SET name = ?, description = ? WHERE id = ?').run('库里的名字', '库里的规则', 'space-default')
+  db.close()
+
+  const sections = []
+  const fresh = {
+    id: 'session-db-default',
+    injected: [],
+    ctx: {
+      systemPrompt: {
+        section(section) {
+          sections.push(section)
+          return () => {}
+        },
+      },
+    },
+  }
+  const [agentCreated] = host.listeners.get('agent/created') ?? []
+  agentCreated({ agent: fresh, source: 'startup' })
+
+  const l4 = sections.find((section) => section.name === 'context-array:l4')
+  assert.match(l4.text, /库里的规则/)
+  assert.match(l4.text, /库里的名字/)
+})
+
 test('history replacement events are recorded even with compaction off', (t) => {
   const { dataDir, host } = setup(t)
   const [sessionEvent] = host.listeners.get('session/event') ?? []
@@ -282,8 +310,9 @@ test('history replacement events are recorded even with compaction off', (t) => 
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
-  assert.equal(events[0].type, 'history/replace')
-  assert.equal(events[0].sessionId, 'session-1')
+  const replaced = events.find((event) => event.type === 'history/replace')
+  assert.equal(replaced?.type, 'history/replace')
+  assert.equal(replaced?.sessionId, 'session-1')
 })
 
 test('the llm/stream listener records usage and passes chunks through', async (t) => {

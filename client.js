@@ -228,6 +228,7 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = React.useState('spaces');
       const [activeSpaceId, setActiveSpaceId] = React.useState('');
       const [overview, setOverview] = React.useState(null);
+      const [overviewError, setOverviewError] = React.useState('');
       const [status, setStatus] = React.useState({ kind: 'ok', text: '' });
       const [busy, setBusy] = React.useState(false);
       const statusTimer = React.useRef(null);
@@ -240,13 +241,19 @@ window.__ModuleLoader__.load({
       React.useEffect(() => () => statusTimer.current && clearTimeout(statusTimer.current), []);
 
       async function refreshOverview() {
-        const data = await call('/overview');
-        setOverview(data);
-        const spaces = data.spaces || [];
-        setActiveSpaceId((current) =>
-          current && spaces.some((space) => space.id === current) ? current : spaces[0]?.id || '',
-        );
-        return data;
+        try {
+          const data = await call('/overview');
+          setOverview(data);
+          setOverviewError('');
+          const spaces = data.spaces || [];
+          setActiveSpaceId((current) =>
+            current && spaces.some((space) => space.id === current) ? current : spaces[0]?.id || '',
+          );
+          return data;
+        } catch (error) {
+          setOverviewError(error.message);
+          throw error;
+        }
       }
 
       React.useEffect(() => {
@@ -325,7 +332,32 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ca-hint' }, '⑤ 「人格」页展示身份规则与投毒尝试记录：插件会冻结人格块并监视网页/搜索类工具结果，外部内容改不了人格。'),
             )
           : null,
-        tab === 'spaces'
+        overviewError
+          ? h(
+              'div',
+              { className: 'ca-card', style: { margin: '10px 14px 0' } },
+              h(
+                'div',
+                { className: 'ca-error' },
+                h('span', null, '面板数据加载失败：' + overviewError),
+                h(
+                  'button',
+                  {
+                    className: 'ca-btn',
+                    onClick: () => {
+                      setOverviewError('');
+                      refreshOverview().catch(() => {});
+                    },
+                  },
+                  '重试',
+                ),
+              ),
+              h('div', { className: 'ca-hint' }, '若重试仍失败：说明插件 API 路由没有注册成功（见 docs/REVIEW-2026-11-28.md 的 P0-0），请重载插件或重启应用后再试。'),
+            )
+          : null,
+        overviewError && !overview
+          ? null
+          : tab === 'spaces'
           ? h(SpacesTab, common)
           : tab === 'memories'
             ? h(MemoriesTab, common)
@@ -343,6 +375,7 @@ window.__ModuleLoader__.load({
       const spaces = (overview && overview.spaces) || [];
       const bindings = (overview && overview.bindings) || [];
       const sessions = (overview && overview.sessions) || [];
+      const defaultSpaceId = (overview && overview.defaultSpaceId) || 'space-default';
       const selected = spaces.find((space) => space.id === activeSpaceId) || spaces[0] || null;
 
       const [createOpen, setCreateOpen] = React.useState(false);
@@ -366,7 +399,7 @@ window.__ModuleLoader__.load({
 
       function deleteReason(space) {
         if (!space) return '';
-        if (space.id === 'space-default') return '默认空间由配置 spaceId 指定，不可删除。';
+        if (space.id === defaultSpaceId) return '默认空间由配置 spaceId 指定，不可删除。';
         if (space.memories > 0) return '该空间还有 ' + space.memories + ' 条有效记忆，先到「记忆」页删除后才能删空间。';
         return '';
       }
@@ -437,7 +470,7 @@ window.__ModuleLoader__.load({
                   'div',
                   { className: 'ca-row', style: { justifyContent: 'space-between' } },
                   h('span', { className: 'ca-name' }, space.name),
-                  space.id === 'space-default' ? h('span', { className: 'ca-badge' }, '默认') : null,
+                  space.id === defaultSpaceId ? h('span', { className: 'ca-badge' }, '默认') : null,
                 ),
                 h('span', { className: 'ca-muted' }, space.memories + ' 条记忆 · ' + space.sessions + ' 个会话'),
               ),

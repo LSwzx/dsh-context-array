@@ -294,7 +294,7 @@ export function getSpace(db, id)
 export function listSpacesDetailed(db)          // + memories / sessions counts
 export function createSpace(db, { name, description })      // id = space-<8 hex>
 export function updateSpace(db, { id, name, description })
-export function deleteSpace(db, id)             // refuses DEFAULT_SPACE and spaces with ACTIVE memories;
+export function deleteSpace(db, id, { defaultSpaceId })   // refuses the configured default and spaces with ACTIVE memories;
                                                 // otherwise clears memories (incl. superseded), inbox and links
 export function countActiveMemories(db, spaceId, dimension?)
 export function listMemories(db, { spaceId, dimension, limit, offset, includeSuperseded })
@@ -315,7 +315,10 @@ export function listInbox(db, { targetSessionId, status, limit })
 export function acknowledgeInbox(db, id)
 export function wakeCountLastHour(db, targetSessionId)
 export function noteWake(db, { targetSessionId, sourceSessionId, inboxId, throttled })
-export function deliverInbox(ctx, { db, targetSessionId, content, wake, maxPerHour, sourceSessionId, inboxId })
+export function deliverInbox(ctx, { db, targetSessionId, content, wake, maxPerHour,
+                                   globalMaxPerHour, cooldownMinutes, sourceSessionId, inboxId })
+// throttled reasons: global | cooldown | hourly; every throttled attempt still injects + logs
+// globalWakeCountLastHour(db), lastWakeAt(db, targetSessionId) are exported helpers
 // -> { mode: 'woke' | 'queued' | 'throttled' | 'offline' }
 // wake uses agent.followup(); everything else uses agent.inject(); over-limit wakes still inject.
 ```
@@ -324,7 +327,8 @@ export function deliverInbox(ctx, { db, targetSessionId, content, wake, maxPerHo
 
 ```js
 export const API_PREFIX = '/api/context-array'
-export function registerContextArrayApi({ ctx, db, config, warn })  // -> disposer (noop without webServer)
+export function registerRoute(ctx, route, { events, warn })  // ctx.inject(["webServer"]) + http-api/* events
+export function registerContextArrayApi({ ctx, db, config, warn, events, persona })  // -> disposer
 ```
 Routes: `GET /health`, `GET /overview`, `POST /spaces/create|/spaces/update|/spaces/delete`,
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
@@ -375,7 +379,7 @@ The frozen block is stored by `getOrCreatePersonaSnapshot(db, { sessionId, rende
 `queueStaleMinutes` (default `10`), `queueMaxRetries` (default `3`), `wakeMaxPerHour`
 (default `10`), `personaGuard` (`off` | `observe` | `enforce`, default `observe`),
 `personaTraits` (default `[]`), `personaGuardTools` (default `["web_search","web_fetch"]`),
-`schemaVersion` (3), derived `dbPath`, `usageLogPath`, `eventsLogPath`.
+`wakeGlobalMaxPerHour` (default `30`), `wakeCooldownMinutes` (default `10`), `schemaVersion` (3), derived `dbPath`, `usageLogPath`, `eventsLogPath`.
 
 ## Tests
 

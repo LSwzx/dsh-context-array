@@ -137,6 +137,15 @@ export function resolveConfig(raw) {
       Number.isSafeInteger(input.wakeMaxPerHour) && input.wakeMaxPerHour > 0
         ? input.wakeMaxPerHour
         : 10,
+    // Anti wake-storm: global hourly cap + per-target cooldown (design §3.4).
+    wakeGlobalMaxPerHour:
+      Number.isSafeInteger(input.wakeGlobalMaxPerHour) && input.wakeGlobalMaxPerHour > 0
+        ? input.wakeGlobalMaxPerHour
+        : 30,
+    wakeCooldownMinutes:
+      Number.isSafeInteger(input.wakeCooldownMinutes) && input.wakeCooldownMinutes > 0
+        ? input.wakeCooldownMinutes
+        : 10,
     // Persona-hijack protection (see src/persona.js).
     personaGuard: PERSONA_GUARD_MODES.includes(input.personaGuard)
       ? input.personaGuard

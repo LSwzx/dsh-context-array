@@ -159,6 +159,7 @@ export function apply(ctx, rawConfig = {}) {
       db: store.db,
       config,
       warn: warn('http-api'),
+      events,
       persona: {
         mode: personaGuard.mode,
         tools: personaGuard.tools,
@@ -277,9 +278,22 @@ export function apply(ctx, rawConfig = {}) {
             ORDER BY l.space_id ASC`,
         )
         .all(agent.id)
+      // The DB row is the source of truth for the default space (the panel can edit it);
+      // config only seeds that row at first boot. Falling back to config here made every
+      // newly created session use the stale config text.
+      const implicitSpace =
+        store.db.prepare('SELECT id, name, description FROM memory_spaces WHERE id = ?').get(config.spaceId) ?? null
       const spaces = bound.length
         ? bound
-        : [{ id: config.spaceId, name: config.spaceName, description: config.spaceRules, role: 'main', implicit: true }]
+        : [
+            {
+              id: config.spaceId,
+              name: implicitSpace?.name ?? config.spaceName,
+              description: implicitSpace?.description ?? config.spaceRules,
+              role: 'main',
+              implicit: true,
+            },
+          ]
       const snapshot = getOrCreateL4Snapshot(store.db, { sessionId: agent.id, spaces, render: renderL4 })
 
       // Persona-hijack protection: freeze this session's identity block from the

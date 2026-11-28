@@ -498,6 +498,8 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
           content,
           wake: args?.wake === true,
           maxPerHour: wakeMaxPerHour,
+          globalMaxPerHour: config.wakeGlobalMaxPerHour ?? 30,
+          cooldownMinutes: config.wakeCooldownMinutes ?? 10,
           inboxId: inbox.id,
           sourceSessionId: sessionId,
         })
@@ -535,9 +537,11 @@ export function createMemoryTools({ db, embedPassage = null, config = {}, warn =
         if (!sessionId) return { messages: [] }
         const status = String(args?.status ?? 'pending')
         return {
+          // `'all'` must reach listInbox as-is: passing undefined would fall back to its
+          // default `'pending'` and silently hide read messages.
           messages: listInbox(db, {
             targetSessionId: sessionId,
-            status: status === 'all' ? undefined : status,
+            status,
             limit: args?.limit,
           }),
         }

@@ -64,16 +64,67 @@ async function readJson(req) {
 }
 
 /**
+ * Register one route on whatever web server this fiber eventually gets.
+ *
+ * `ctx.get('webServer')` can legitimately be empty while the plugin activates (the web
+ * carrier may mount later), so the old silent-noop path could leave the panel without a
+ * route forever. `ctx.inject` runs now when the service exists and later when it
+ * appears; the outcome is always recorded as an `http-api/*` event.
+ *
+ * @param {any} ctx
+ * @param {object} route
+ * @param {{ events?: { append: (record: object) => void } | null, warn?: (error: unknown) => void }} [options]
+ * @returns {() => void}
+ */
+export function registerRoute(ctx, route, { events = null, warn = () => {} } = {}) {
+  const announce = (status, extra = {}) => {
+    try {
+      events?.append({ type: `http-api/${status}`, at: new Date().toISOString(), ...extra })
+    } catch {
+      // Observability must never block registration.
+    }
+  }
+  const attach = (web) => {
+    if (!web || typeof web.register !== 'function') {
+      announce('unavailable')
+      return () => {}
+    }
+    try {
+      const dispose = web.register(route)
+      announce('registered')
+      return typeof dispose === 'function' ? dispose : () => {}
+    } catch (error) {
+      warn(error)
+      announce('failed', { message: String(error?.message ?? error) })
+      return () => {}
+    }
+  }
+
+  if (typeof ctx?.inject === 'function') {
+    ctx.inject(['webServer'], (webCtx) => {
+      const dispose = attach(webCtx?.webServer)
+      if (typeof webCtx?.effect === 'function') webCtx.effect(() => dispose, 'context-array:http-api-route')
+    })
+    return () => {}
+  }
+
+  const web = ctx?.get?.('webServer')
+  if (!web) {
+    announce('unavailable')
+    return () => {}
+  }
+  return attach(web)
+}
+
+/**
  * Register the API route.
  *
- * @param {{ ctx: any, db: any, config: object, warn: (error: unknown) => void }} input
- * @returns {() => void} disposer (noop when the deployment has no web server)
+ * @param {{ ctx: any, db: any, config: object, warn: (error: unknown) => void,
+ *           events?: object | null, persona?: object | null }} input
+ * @returns {() => void} disposer
  */
-export function registerContextArrayApi({ ctx, db, config, warn, persona = null }) {
-  const web = ctx.get?.('webServer')
-  if (!web || typeof web.register !== 'function') return () => {}
-
-  return web.register({
+export function registerContextArrayApi({ ctx, db, config, warn, events = null, persona = null }) {
+  const route = {
     kind: 'prefix',
     path: API_PREFIX,
     async handler(req, res) {
@@ -117,6 +168,7 @@ export function registerContextArrayApi({ ctx, db, config, warn, persona = null 
             sessions: listKnownSessions(db),
             queue: queueStats(db),
             wakeMaxPerHour: config.wakeMaxPerHour,
+            defaultSpaceId: config.spaceId,
           })
         }
         if (method === 'POST' && path === '/spaces/create') {
@@ -129,7 +181,7 @@ export function registerContextArrayApi({ ctx, db, config, warn, persona = null 
           return space ? json(res, 200, { space }) : json(res, 404, { space: null, error: 'SPACE_NOT_FOUND' })
         }
         if (method === 'POST' && path === '/spaces/delete') {
-          const result = deleteSpace(db, String(body.id ?? ''))
+          const result = deleteSpace(db, String(body.id ?? ''), { defaultSpaceId: config.spaceId })
           return json(res, result.deleted ? 200 : 409, result.deleted ? result : { ...result, error: result.reason })
         }
         if (method === 'GET' && path === '/memories') {
@@ -228,6 +280,8 @@ export function registerContextArrayApi({ ctx, db, config, warn, persona = null 
             content,
             wake: body.wake === true,
             maxPerHour: config.wakeMaxPerHour,
+            globalMaxPerHour: config.wakeGlobalMaxPerHour,
+            cooldownMinutes: config.wakeCooldownMinutes,
             inboxId: inbox.id,
             sourceSessionId: body.sourceSessionId ?? null,
           })
@@ -243,5 +297,6 @@ export function registerContextArrayApi({ ctx, db, config, warn, persona = null 
         return json(res, 500, { error: String(error?.message ?? error) })
       }
     },
-  })
+  }
+  return registerRoute(ctx, route, { events, warn })
 }

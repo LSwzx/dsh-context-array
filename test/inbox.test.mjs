@@ -112,8 +112,50 @@ test('throttled wakes do not count against the hourly budget', (t) => {
   const ctx = fakeCtx({ s2: agent })
   noteWake(db, { targetSessionId: 's2', inboxId: null, throttled: true })
   noteWake(db, { targetSessionId: 's2', inboxId: null, throttled: false })
+  // Age the successful wake past the cooldown so this test isolates the hourly budget.
+  db.prepare("UPDATE inbox_wake_log SET at = datetime('now', '-30 minutes') WHERE throttled = 0").run()
   assert.equal(wakeCountLastHour(db, 's2'), 1)
   assert.equal(deliverInbox(ctx, { db, targetSessionId: 's2', content: 'ok', wake: true }).mode, 'woke')
+})
+
+test('a second wake inside the cooldown window is throttled to a queue', (t) => {
+  const db = fixture(t)
+  const { agent, calls } = agentStub()
+  const ctx = fakeCtx({ s2: agent })
+  assert.equal(deliverInbox(ctx, { db, targetSessionId: 's2', content: 'first', wake: true }).mode, 'woke')
+  const second = deliverInbox(ctx, { db, targetSessionId: 's2', content: 'second', wake: true, cooldownMinutes: 10 })
+  assert.equal(second.mode, 'throttled')
+  assert.equal(second.reason, 'cooldown')
+  assert.equal(calls.followup.length, 1, 'only the first wake started a turn')
+  assert.equal(calls.inject.length, 1, 'the throttled message is still queued')
+})
+
+test('the global hourly wake budget throttles even a first wake for a target', (t) => {
+  const db = fixture(t)
+  const { agent, calls } = agentStub()
+  const ctx = fakeCtx({ s3: agent })
+  for (let index = 0; index < 2; index += 1) {
+    noteWake(db, { targetSessionId: 'other-' + index, inboxId: null, throttled: false })
+    db.prepare("UPDATE inbox_wake_log SET at = datetime('now', '-5 minutes')").run()
+  }
+  const result = deliverInbox(ctx, { db, targetSessionId: 's3', content: 'hi', wake: true, globalMaxPerHour: 2 })
+  assert.equal(result.mode, 'throttled')
+  assert.equal(result.reason, 'global')
+  assert.equal(calls.followup.length, 0)
+  assert.equal(calls.inject.length, 1)
+})
+
+test('inbox dedupe allows resending the same text in a later hour', (t) => {
+  const db = fixture(t)
+  const early = new Date('2026-11-28T01:05:00Z')
+  const later = new Date('2026-11-28T02:05:00Z')
+  const first = sendInbox(db, { spaceId: 'space-default', sourceSessionId: 's1', targetSessionId: 's2', content: 'ping', now: early })
+  const sameHour = sendInbox(db, { spaceId: 'space-default', sourceSessionId: 's1', targetSessionId: 's2', content: 'ping', now: early })
+  const nextHour = sendInbox(db, { spaceId: 'space-default', sourceSessionId: 's1', targetSessionId: 's2', content: 'ping', now: later })
+  assert.equal(first.deduped, false)
+  assert.equal(sameHour.deduped, true)
+  assert.equal(nextHour.deduped, false)
+  assert.notEqual(nextHour.id, first.id)
 })
 
 test('listInbox exposes hop_count and the throttled wake marker', (t) => {

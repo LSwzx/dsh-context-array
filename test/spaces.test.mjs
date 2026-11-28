@@ -150,6 +150,17 @@ test('bind refuses an unknown space', (t) => {
   assert.equal(bindSessionToSpace(db, { sessionId: 's1', spaceId: 'space-missing' }).reason, 'SPACE_NOT_FOUND')
 })
 
+test('the protected default space follows the configured id, not a hardcoded one', (t) => {
+  const db = fixture(t)
+  const customDefault = createSpace(db, { name: 'Custom default' })
+  assert.deepEqual(deleteSpace(db, customDefault.id, { defaultSpaceId: customDefault.id }), {
+    deleted: false,
+    reason: 'DEFAULT_SPACE',
+  })
+  // The built-in id is deletable when it is no longer the configured default and empty.
+  assert.deepEqual(deleteSpace(db, 'space-default', { defaultSpaceId: customDefault.id }), { deleted: true })
+})
+
 test('memories list newest first and hide superseded ones', (t) => {
   const db = fixture(t)
   const space = createSpace(db, { name: 'List' })

@@ -18,10 +18,19 @@ export const INBOX_SOURCE_KIND = 'context-array-inbox'
 
 /** Default sliding-hour wake limit per target session. */
 export const DEFAULT_WAKE_MAX_PER_HOUR = 10
+/** Default sliding-hour wake limit across all targets (anti wake-storm). */
+export const DEFAULT_WAKE_GLOBAL_MAX_PER_HOUR = 30
+/** Default minimum gap between two wakes of the same target. */
+export const DEFAULT_WAKE_COOLDOWN_MINUTES = 10
 
-/** Stable dedupe key for one (space, source, target, content) tuple. */
-export function inboxDedupeKey(content) {
-  return crypto.createHash('sha256').update(String(content)).digest('hex').slice(0, 32)
+/** Stable dedupe key for one (content, UTC hour) tuple: resend after the hour. */
+export function inboxDedupeKey(content, now = new Date()) {
+  const hourBucket = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}${String(now.getUTCHours()).padStart(2, '0')}`
+  return crypto
+    .createHash('sha256')
+    .update(`${String(content)}\u0000${hourBucket}`)
+    .digest('hex')
+    .slice(0, 32)
 }
 
 /**
@@ -29,9 +38,9 @@ export function inboxDedupeKey(content) {
  *
  * @returns {{ id: string, deduped: boolean }}
  */
-export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, content }) {
+export function sendInbox(db, { spaceId, sourceSessionId, targetSessionId, content, now = new Date() }) {
   const id = crypto.randomUUID()
-  const dedupe = inboxDedupeKey(content)
+  const dedupe = inboxDedupeKey(content, now)
   const existing = db
     .prepare(
       `SELECT id FROM inbox
@@ -92,6 +101,30 @@ export function wakeCountLastHour(db, targetSessionId) {
     .get(targetSessionId).n
 }
 
+/** Wakes delivered (not throttled) to any target in the trailing hour. */
+export function globalWakeCountLastHour(db) {
+  return db
+    .prepare("SELECT COUNT(*) AS n FROM inbox_wake_log WHERE throttled = 0 AND at >= datetime('now', '-1 hour')")
+    .get().n
+}
+
+/** Timestamp of the last delivered wake for one target, or null. */
+export function lastWakeAt(db, targetSessionId) {
+  const row = db
+    .prepare(
+      "SELECT at FROM inbox_wake_log WHERE target_session_id = ? AND throttled = 0 ORDER BY at DESC, id DESC LIMIT 1",
+    )
+    .get(targetSessionId)
+  return row?.at ?? null
+}
+
+/** Parse SQLite UTC timestamps (`YYYY-MM-DD HH:MM:SS`, no zone) into epoch ms. */
+function sqliteTimeMs(value) {
+  if (!value) return null
+  const parsed = Date.parse(String(value).replace(' ', 'T') + 'Z')
+  return Number.isNaN(parsed) ? null : parsed
+}
+
 /** Record one wake attempt (delivered or throttled). */
 export function noteWake(db, { targetSessionId, sourceSessionId, inboxId, throttled }) {
   db.prepare(
@@ -116,7 +149,15 @@ function inboxMessage(content) {
  * @returns {{ mode: 'woke'|'queued'|'throttled'|'offline', targetSessionId: string, wakeCount?: number }}
  */
 export function deliverInbox(ctx, request) {
-  const { targetSessionId, content, wake = false, maxPerHour = DEFAULT_WAKE_MAX_PER_HOUR } = request
+  const {
+    targetSessionId,
+    content,
+    wake = false,
+    maxPerHour = DEFAULT_WAKE_MAX_PER_HOUR,
+    globalMaxPerHour = DEFAULT_WAKE_GLOBAL_MAX_PER_HOUR,
+    cooldownMinutes = DEFAULT_WAKE_COOLDOWN_MINUTES,
+    now = () => Date.now(),
+  } = request
   const db = request.db
   const agents = ctx?.get?.('agents')
   const agent = agents?.get?.(targetSessionId)
@@ -132,11 +173,28 @@ export function deliverInbox(ctx, request) {
     return { mode: 'queued', targetSessionId }
   }
 
-  const used = db ? wakeCountLastHour(db, targetSessionId) : 0
-  if (used >= maxPerHour) {
-    if (db) noteWake(db, { targetSessionId, sourceSessionId: request.sourceSessionId, inboxId: request.inboxId, throttled: true })
+  const throttle = (reason) => {
+    if (db) {
+      noteWake(db, {
+        targetSessionId,
+        sourceSessionId: request.sourceSessionId,
+        inboxId: request.inboxId,
+        throttled: true,
+      })
+    }
     if (canInject) agent.inject(message)
-    return { mode: 'throttled', targetSessionId, wakeCount: used }
+    return { mode: 'throttled', reason, targetSessionId }
+  }
+
+  if (db) {
+    const globalUsed = globalWakeCountLastHour(db)
+    if (globalUsed >= globalMaxPerHour) return throttle('global')
+
+    const lastAt = sqliteTimeMs(lastWakeAt(db, targetSessionId))
+    if (lastAt !== null && now() - lastAt < cooldownMinutes * 60_000) return throttle('cooldown')
+
+    const used = wakeCountLastHour(db, targetSessionId)
+    if (used >= maxPerHour) return throttle('hourly')
   }
 
   if (!canWake) {
@@ -144,6 +202,13 @@ export function deliverInbox(ctx, request) {
     return { mode: 'queued', targetSessionId }
   }
   agent.followup(message)
-  if (db) noteWake(db, { targetSessionId, sourceSessionId: request.sourceSessionId, inboxId: request.inboxId, throttled: false })
-  return { mode: 'woke', targetSessionId, wakeCount: used + 1 }
+  if (db) {
+    noteWake(db, {
+      targetSessionId,
+      sourceSessionId: request.sourceSessionId,
+      inboxId: request.inboxId,
+      throttled: false,
+    })
+  }
+  return { mode: 'woke', targetSessionId }
 }

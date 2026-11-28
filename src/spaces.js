@@ -59,8 +59,8 @@ export function updateSpace(db, { id, name, description } = {}) {
  * action with the same number it shows). Superseded rows do not block deletion; they
  * are cleared together with the space so no orphan history survives it.
  */
-export function deleteSpace(db, id) {
-  if (id === DEFAULT_SPACE_ID) return { deleted: false, reason: 'DEFAULT_SPACE' }
+export function deleteSpace(db, id, { defaultSpaceId = DEFAULT_SPACE_ID } = {}) {
+  if (id === defaultSpaceId) return { deleted: false, reason: 'DEFAULT_SPACE' }
   const row = getSpace(db, id)
   if (!row) return { deleted: false, reason: 'NOT_FOUND' }
   const active = countActiveMemories(db, id)

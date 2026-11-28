@@ -101,6 +101,7 @@ test('overview, spaces and memories round-trip through the API', async (t) => {
 
   const overview = await request(route, { path: '/api/context-array/overview' })
   assert.equal(overview.status, 200)
+  assert.equal(overview.json.defaultSpaceId, 'space-default')
   assert.equal(overview.json.spaces.length, 2)
   assert.equal(overview.json.sessions[0].sessionId, 's1')
 
