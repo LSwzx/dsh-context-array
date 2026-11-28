@@ -443,7 +443,7 @@ test(
 
       // Main-thread liveness probe: the same 50 ms interval must keep firing while
       // the worker runs inference. A batch of 60 queued embeddings keeps the probe
-      // busy for ~0.5 s, so this observes ~10 timer ticks instead of the single tick
+      // busy for ~1 s even on a fast box, so this observes several timer ticks instead of the single tick
       // a 5-call loop allows.
       //
       // On a busy Windows box an unrelated GC/OS pause can delay one tick by tens of
@@ -451,7 +451,7 @@ test(
       // drift" figure) plus a loose max guard; event-loop utilization corroborates
       // the same claim directly: if inference ran on the main thread this would be
       // ~100%, not a few percent.
-      const LIVE_BATCH = 60
+      const LIVE_BATCH = 200
       const driftSamples = []
       let previousTick = performance.now()
       const probe = setInterval(() => {
@@ -529,9 +529,9 @@ test(
       assert.ok(dot < 0.9999, 'passage and query prefixes must not collapse to the same vector')
 
       const stats = client.stats()
-      // 5 latency samples + 60 liveness samples + 1 printed vector + 1 determinism
+      // 5 latency samples + liveness samples + 1 printed vector + 1 determinism
       // repeat + 1 query.
-      assert.equal(stats.requests, 5 + 60 + 1 + 1 + 1)
+      assert.equal(stats.requests, 5 + LIVE_BATCH + 1 + 1 + 1)
       assert.equal(stats.failures, 0)
       assert.deepEqual(errors, [])
     } finally {
