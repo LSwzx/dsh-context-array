@@ -9,6 +9,8 @@
 - **修复**：`inbox_send` 输出 schema 缺 `hop`/`reason`，`additionalProperties:false` 导致
   工具执行成功但返回校验失败（E2E R4 发现）。
 - 新增实机验证与 Token 收益报告 `docs/E2E-REPORT.md` + 原始数据 `docs/e2e-data.json`。
+- 新增 `tools/e2e-real.mjs` 真实对话 E2E：通过 `ctx.agents` 创建 4 个全新空白会话、5 轮硬编码自然语言对话，
+  `e2e_run`/`e2e_status` 管理员工具驱动，自动生成 `docs/E2E-REAL-REPORT.md`（实测 ¥0.14 vs 无缓存 ¥0.83，省 83.2%）。
 
 ## 1.0.0 (2026-11-28)
 

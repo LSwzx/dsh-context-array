@@ -41,6 +41,7 @@ import {
 } from './src/prompt.js'
 import { buildPersonaText, createPersonaGuard } from './src/persona.js'
 import { createPersonaWriteTool } from './src/persona-tool.js'
+import { createE2ETool } from './src/e2e-tool.js'
 import { createUsageObserver } from './src/observer.js'
 import { buildBootstrapMessage, deliverBootstrap } from './src/append.js'
 import { createEventLog } from './src/events.js'
@@ -161,6 +162,16 @@ export function apply(ctx, rawConfig = {}) {
     ctx.tools.register(createPersonaWriteTool({ db: store.db, warn: warn('persona-write') }))
   } catch (error) {
     warn('persona-write')(error)
+  }
+
+  // Real-conversation E2E driver (admin only): tools/e2e-real.mjs needs ctx.agents to
+  // create blank sessions and deliver natural-language turns.
+  try {
+    for (const tool of createE2ETool({ ctx, db: store.db, config, events, warn: warn('e2e-tool') })) {
+      ctx.tools.register(tool)
+    }
+  } catch (error) {
+    warn('e2e-tool')(error)
   }
 
   // Persona guard: watches external tool results for hijack attempts. The waterfall

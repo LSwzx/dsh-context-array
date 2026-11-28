@@ -9,6 +9,8 @@ M0 六项前置验证（含压缩接管与折叠）、M1 观测/追加/静态存
 M3 中央记忆管理员 + 异步队列、M4 留言箱/多空间/侧边栏面板、M5 人格防护与按会话人格。
 实测记录见 [`docs/`](docs/) 下的 `M1-RESULTS`、`M2-RESULTS`、`M3-RESULTS`、`M4-RESULTS`、`PERSONA-GUARD`；
 端到端验收与 Token 收益见 [`docs/E2E-REPORT.md`](docs/E2E-REPORT.md)。
+真实对话（4 个全新会话 + 5 轮自然语言）验收见 [`docs/E2E-REAL-REPORT.md`](docs/E2E-REAL-REPORT.md)，
+可用 `tools/e2e-real.mjs`（由管理员工具 `e2e_run` 驱动）重跑。
 
 > **已知问题（2026-11-28 评审，待修）**：见 [`docs/REVIEW-2026-11-28.md`](docs/REVIEW-2026-11-28.md)。
 > P0-0（面板 404）、P0-1（编辑默认空间不生效）与 P1 四项已修（v0.4.1），见该文档的"修复状态"；
