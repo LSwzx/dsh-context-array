@@ -335,7 +335,8 @@ export function registerContextArrayApi({ ctx, db, config, warn, events, persona
 ```
 Routes: `GET /health`, `GET /overview`, `POST /spaces/create|/spaces/update|/spaces/delete`,
 `GET /memories?spaceId=&dimension=&limit=&offset=` (returns `{ memories, total, limit, offset, dimension }`),
-`POST /memories/delete`, `POST /bind|/unbind`,
+`POST /memories/delete` (always `403 MEMORY_READ_ONLY`: the UI is read-only for memory),
+`POST /bind|/unbind`,
 `GET /queue?status=&sourceSessionId=&limit=&offset=` (returns `{ stats, items, total, hasMore, stuckCount,
 stuckAfterSeconds, maxRetries }`), `GET /queue/:id` (full `raw_content`),
 `GET /inbox?targetSessionId=&status=`, `POST /inbox/send|/inbox/ack`.

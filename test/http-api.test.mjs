@@ -237,8 +237,8 @@ test('business failures carry a readable error field instead of a silent 200', a
     headers: { 'x-context-array-ui': '1' },
     body: { id: 'mem-missing' },
   })
-  assert.equal(missingMemory.status, 404)
-  assert.equal(missingMemory.json.error, 'MEMORY_NOT_FOUND')
+  assert.equal(missingMemory.status, 403)
+  assert.equal(missingMemory.json.error, 'MEMORY_READ_ONLY', 'humans never delete memory through the UI API')
 })
 
 test('the UI cannot mint an admin binding', async (t) => {

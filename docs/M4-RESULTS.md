@@ -7,7 +7,7 @@
 
 | 部分 | 文件 | 内容 |
 |---|---|---|
-| 空间/绑定/记忆浏览 | `src/spaces.js` | 空间增删改查（默认空间与非空空间拒删）、绑定 upsert/解绑、记忆列表（过滤已取代）、硬删除单条记忆 |
+| 空间/绑定/记忆浏览 | `src/spaces.js` | 空间增删改查（默认空间与非空空间拒删）、绑定 upsert/解绑、记忆列表（过滤已取代，只读：人类不删除） |
 | 留言箱 | `src/inbox.js` | 排队（`agent.inject`，不唤醒、不计费启动轮次）与唤醒（`agent.followup`，滑动小时限流 10 次、写 `inbox_wake_log`） |
 | Host HTTP API | `src/http-api.js` | `/api/context-array` 前缀路由；读接口 loopback-only，写接口额外要求 `x-context-array-ui: 1` |
 | 工具 | `src/memory-tools.js` | 新增 `memory_bind` / `memory_unbind` / `inbox_send` / `inbox_list` / `inbox_ack`，身份一律取宿主注入的 `exec.agent.id` |
@@ -103,7 +103,7 @@ GET  /api/context-array/overview → spaces=1, bindings=13, sessions=13
 2. **记忆筛选/分页**：`GET /memories` 增加 `dimension`、`offset`，返回 `total`；筛选在后端完成，
    因此空态可以确定地写"这个空间没有「fact」维度的记忆"，而不是"已加载的 100 条里没有"。
 3. **时间**：统一 `new Date(ts.replace(' ', 'T') + 'Z')` 再本地化；SQLite `CURRENT_TIMESTAMP` 是 UTC 无时区。
-4. **删除记忆文案**：明确"之后的检索不再返回它；已写入对话历史的内容不会被撤回"。
+4. ~~删除记忆文案~~：v0.4.4 起按"人类没有权限修改记忆"取消删除入口，`/memories/delete` 改为 403 只读拒绝。
 5. **队列明细**：`GET /queue`（`stats/items/total/hasMore/stuckCount/stuckAfterSeconds/maxRetries`）+
    `GET /queue/:id`（完整 `raw_content`）。列表含 `retry_count`、`claimed_ago_seconds`、
    `content_preview`（200 字）、`content_length`；processing 超过 `stuckAfterSeconds` 的单独标记；

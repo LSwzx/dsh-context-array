@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
     const ERROR_TEXT = {
       SPACE_NAME_REQUIRED: '空间名称不能为空',
       SPACE_NOT_FOUND: '空间不存在',
-      SPACE_NOT_EMPTY: '空间里还有有效记忆，先删除记忆再删空间',
+      SPACE_NOT_EMPTY: '空间里还有有效记忆，需由记忆管理员在对话里处理后才能删除',
       DEFAULT_SPACE: '默认空间不能删除',
       MEMORY_NOT_FOUND: '这条记忆已经不存在',
       BINDING_NOT_FOUND: '这条绑定已经不存在',
@@ -365,7 +365,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ca-card-head' }, h('span', { className: 'ca-name' }, '新手引导'), h('button', { className: 'ca-btn', onClick: dismissGuide }, '知道了')),
               h('div', { className: 'ca-hint' }, '① 插件不会自动把任何会话绑定到空间：未绑定的会话默认使用「默认空间」，检索与提示词都照常工作。'),
               h('div', { className: 'ca-hint' }, '② 需要按项目隔离时：在「空间」页新建空间，再把会话绑定到它（或在对话里用 memory_bind）。'),
-              h('div', { className: 'ca-hint' }, '③ 「记忆」页按空间与维度查看有效记忆，只支持删除单条；已被取代的旧记忆不显示。'),
+              h('div', { className: 'ca-hint' }, '③ 「记忆」页只读：按空间与维度查看有效记忆；人类没有修改权限，写入/失效只由记忆管理员在对话里完成。'),
               h('div', { className: 'ca-hint' }, '④ 「队列」只读，由记忆管理员在对话里领取/归档/拒绝；「留言箱」可发留言，勾选唤醒会开启对方一轮并有每小时限流。'),
               h('div', { className: 'ca-hint' }, '⑤ 「人格」页展示身份规则与投毒尝试记录：插件会冻结人格块并监视网页/搜索类工具结果，外部内容改不了人格。'),
             )
@@ -442,7 +442,7 @@ window.__ModuleLoader__.load({
       function deleteReason(space) {
         if (!space) return '';
         if (space.id === defaultSpaceId) return '默认空间由配置 spaceId 指定，不可删除。';
-        if (space.memories > 0) return '该空间还有 ' + space.memories + ' 条有效记忆，先到「记忆」页删除后才能删空间。';
+        if (space.memories > 0) return '该空间还有 ' + space.memories + ' 条有效记忆，需由记忆管理员在对话里处理（人类不能直接删除记忆）。';
         return '';
       }
 
@@ -748,7 +748,6 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(false);
       const [loadError, setLoadError] = React.useState('');
       const [selectedId, setSelectedId] = React.useState('');
-      const [confirmId, setConfirmId] = React.useState('');
 
       async function load() {
         if (!space) return;
@@ -824,7 +823,6 @@ window.__ModuleLoader__.load({
                             'data-selected': memory.id === selectedId,
                             onClick: () => {
                               setSelectedId(memory.id);
-                              setConfirmId('');
                             },
                           },
                           h(
@@ -877,34 +875,12 @@ window.__ModuleLoader__.load({
                       h(
                         'div',
                         { className: 'ca-card' },
-                        h('div', { className: 'ca-name' }, '危险操作'),
-                        confirmId === selected.id
-                          ? h(
-                              React.Fragment,
-                              null,
-                              h('div', { className: 'ca-content' }, '删除这条记忆？『' + String(selected.content).slice(0, 40) + (String(selected.content).length > 40 ? '…' : '') + '』之后的检索不再返回它；已写入对话历史的内容不会被撤回。'),
-                              h(
-                                'div',
-                                { className: 'ca-row' },
-                                h(
-                                  'button',
-                                  {
-                                    className: 'ca-btn is-danger',
-                                    disabled: busy,
-                                    onClick: () =>
-                                      act('删除记忆', async () => {
-                                        await call('/memories/delete', { method: 'POST', body: { id: selected.id } });
-                                        setConfirmId('');
-                                        await load();
-                                        return '已删除';
-                                      }),
-                                  },
-                                  '确认删除',
-                                ),
-                                h('button', { className: 'ca-btn', onClick: () => setConfirmId('') }, '取消'),
-                              ),
-                            )
-                          : h('button', { className: 'ca-btn is-danger', disabled: busy, onClick: () => setConfirmId(selected.id) }, '删除这条记忆'),
+                        h('div', { className: 'ca-name' }, '记忆是只读的'),
+                        h(
+                          'div',
+                          { className: 'ca-hint' },
+                          '人类没有修改记忆的权限：面板不提供编辑或删除。写入与失效只能由记忆管理员在对话里通过工具完成——memory_archive 归档新记忆、用 supersedesId 取代旧记忆，或 memory_queue_settle 拒绝候选。',
+                        ),
                       ),
                     ),
               ),

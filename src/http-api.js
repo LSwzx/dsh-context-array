@@ -18,7 +18,6 @@ import {
   bindSessionToSpace,
   countActiveMemories,
   createSpace,
-  deleteMemory,
   deleteSpace,
   listBindings,
   listKnownSessions,
@@ -203,8 +202,9 @@ export function registerContextArrayApi({ ctx, db, config, warn, events = null, 
           })
         }
         if (method === 'POST' && path === '/memories/delete') {
-          const deleted = deleteMemory(db, String(body.id ?? ''))
-          return json(res, deleted ? 200 : 404, deleted ? { deleted } : { deleted, error: 'MEMORY_NOT_FOUND' })
+          // Human callers may never modify memory: writes are the central memory
+          // manager's job and go through the admin tools only.
+          return json(res, 403, { deleted: false, error: 'MEMORY_READ_ONLY' })
         }
         if (method === 'POST' && path === '/bind') {
           const role = String(body.role ?? 'main')
